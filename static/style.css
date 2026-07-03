@@ -66,6 +66,35 @@ a:hover { text-decoration: underline; }
   color: var(--ink); opacity: .7; text-transform: uppercase; text-align: left;
 }
 
+/* topbar nav + auth chip */
+.nav { display: flex; align-items: center; gap: var(--space-md); flex-wrap: wrap; justify-content: flex-end; }
+.authbox { display: inline-flex; align-items: center; gap: var(--space-sm); }
+.userchip {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-weight: 700; font-size: 12px;
+  background: var(--lime); color: var(--ink);
+  border: 1.8px solid var(--ink); border-radius: 999px;
+  padding: 4px 12px 4px 4px; box-shadow: 2px 2px 0 0 var(--ink);
+}
+.userchip .avatar { width: 24px; height: 24px; border-radius: 50%; border: 1.5px solid var(--ink); object-fit: cover; flex: none; }
+.gbtn { font-size: 12px; padding: 9px 16px; }
+
+/* browse grid */
+.browsegrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--space-lg); }
+.gamecard {
+  display: flex; flex-direction: column; overflow: hidden;
+  border: 2px solid var(--ink); border-radius: var(--radius);
+  background: var(--card); box-shadow: var(--shadow); font-weight: 700;
+  transition: transform .1s ease, box-shadow .1s ease;
+}
+.gamecard:hover { transform: translate(-2px, -2px); box-shadow: 7px 7px 0 0 var(--ink); text-decoration: none; }
+.gamecard-img { aspect-ratio: 4 / 3; background: var(--surface); border-bottom: 2px solid var(--ink); overflow: hidden; }
+.gamecard-img img { width: 100%; height: 100%; object-fit: cover; display: block; image-rendering: pixelated; }
+.gamecard-body { padding: 14px 16px; }
+.gamecard-title { font-size: 15px; font-weight: 700; line-height: 1.25; margin-bottom: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gamecard-meta { display: flex; gap: 6px; font-size: 12px; color: var(--muted); font-weight: 600; }
+.gamecard-by { margin-top: 6px; font-size: 11px; color: var(--muted); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* eyebrow + titles */
 .eyebrow {
   text-transform: uppercase; letter-spacing: 3px; font-size: 12px; font-weight: 700;

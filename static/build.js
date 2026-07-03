@@ -249,8 +249,9 @@ $("how").addEventListener("click", (e) => {
   toast("Add names → upload → pick who it is → publish → share!");
 });
 
-// ---- "my games" (creator's own games, kept in localStorage with edit tokens) ----
+// ---- "my games" — localStorage (device) merged with account games (server) ----
 const MYGAMES_KEY = "pixelreveal:mygames";
+let accountGames = [];  // games owned by the signed-in Google account
 
 function loadMyGames() {
   try { return JSON.parse(localStorage.getItem(MYGAMES_KEY)) || []; }
@@ -265,19 +266,48 @@ function rememberGame(id, title, token) {
 }
 
 function renderMyGames() {
-  const games = loadMyGames();
+  const seen = new Set();
+  const merged = accountGames.map((g) => {
+    seen.add(g.id);
+    return { id: g.id, title: g.title, token: g.edit_token };
+  });
+  loadMyGames().forEach((g) => { if (!seen.has(g.id)) merged.push(g); });
+
   const card = $("mygames");
-  if (games.length === 0) { card.classList.add("hidden"); return; }
+  if (merged.length === 0) { card.classList.add("hidden"); return; }
   card.classList.remove("hidden");
-  $("mygameslist").innerHTML = games
-    .map((g) => `<div class="mygame">
+  if (accountGames.length) $("mygamespill").textContent = "synced to your account";
+  $("mygameslist").innerHTML = merged
+    .map((g) => {
+      const edit = g.token ? `/g/${g.id}/edit#t=${g.token}` : `/g/${g.id}/edit`;
+      return `<div class="mygame">
       <span class="grow" title="${escapeHtml(g.title)}">${escapeHtml(g.title)}</span>
-      <a class="arrow-link" href="/g/${g.id}/edit#t=${g.token}">Edit</a>
+      <a class="arrow-link" href="${edit}">Edit</a>
       <a href="/g/${g.id}">Play</a>
       <a href="/g/${g.id}/results">Stats</a>
-    </div>`)
+    </div>`;
+    })
     .join("");
+}
+
+// ---- top-right auth chip + load account-owned games ----
+async function initAuth() {
+  let me = { enabled: false, user: null };
+  try { me = await fetch("/api/me").then((r) => r.json()); } catch {}
+  const box = $("authbox");
+  if (me.user) {
+    const pic = me.user.picture
+      ? `<img class="avatar" src="${escapeHtml(me.user.picture)}" alt="" referrerpolicy="no-referrer">` : "";
+    box.innerHTML =
+      `<span class="userchip">${pic}${escapeHtml(me.user.name)}</span>` +
+      `<a class="arrow-link" href="/auth/logout">Sign out</a>`;
+    try { accountGames = (await fetch("/api/mygames").then((r) => r.json())).games || []; } catch {}
+  } else if (me.enabled) {
+    box.innerHTML = `<a class="btn btn-ghost gbtn" href="/auth/login?next=%2F">Sign in with Google</a>`;
+  }
+  renderMyGames();
 }
 
 refreshNameCount();
 renderMyGames();
+initAuth();

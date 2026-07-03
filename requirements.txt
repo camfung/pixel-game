@@ -2,3 +2,7 @@ fastapi
 uvicorn[standard]
 pillow
 python-multipart
+authlib
+httpx
+itsdangerous
+python-dotenv

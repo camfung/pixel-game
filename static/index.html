@@ -10,7 +10,11 @@
       <div class="logo" id="logo"></div>
       <div class="name">PIXEL REVEAL<small>guess the blur</small></div>
     </div>
-    <a class="arrow-link" href="#" id="how">How it works</a>
+    <nav class="nav">
+      <a class="arrow-link" href="/browse">Browse games</a>
+      <a class="arrow-link" href="#" id="how">How it works</a>
+      <span id="authbox" class="authbox"></span>
+    </nav>
   </div>
 
   <p class="eyebrow">Game builder</p>
@@ -21,7 +25,7 @@
   <div class="card pad-lg hidden" id="mygames">
     <div class="row spread" style="margin-bottom: var(--space-md);">
       <h2 style="margin:0;">Your games</h2>
-      <span class="pill">editable on this device</span>
+      <span class="pill" id="mygamespill">editable on this device</span>
     </div>
     <div id="mygameslist" class="stack"></div>
   </div>

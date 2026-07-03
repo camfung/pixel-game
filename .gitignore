@@ -1,4 +1,5 @@
 .venv/
+.env
 data/games.db
 data/uploads/
 data/cache/

@@ -28,6 +28,8 @@ function getToken() {
   } catch { return null; }
 }
 const TOKEN = getToken();
+// query suffix for GET/DELETE; empty when relying on Google-account (session) auth
+const tokenParam = TOKEN ? `?token=${encodeURIComponent(TOKEN)}` : "";
 
 function rememberGame(id, title, token) {
   let games = [];
@@ -144,16 +146,16 @@ function makeOptsEditor(container, options, correctIndex, radioName) {
 let game = null;
 
 (async function boot() {
-  if (!TOKEN) { $("gate").classList.remove("hidden"); return; }
+  // no local token? still try — the server authorises signed-in Google owners too
   try {
-    const r = await fetch(`/api/games/${GID}/admin?token=${encodeURIComponent(TOKEN)}`);
+    const r = await fetch(`/api/games/${GID}/admin${tokenParam}`);
     if (!r.ok) throw new Error();
     game = await r.json();
   } catch {
     $("gate").classList.remove("hidden");
     return;
   }
-  rememberGame(GID, game.title, TOKEN);
+  if (TOKEN) rememberGame(GID, game.title, TOKEN);
   $("editor").classList.remove("hidden");
   $("title-h").textContent = game.title;
   $("gtitle").value = game.title;
@@ -171,9 +173,13 @@ $("savetitle").addEventListener("click", async () => {
   const r = await fetch(`/api/games/${GID}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ token: TOKEN, title }),
+    body: JSON.stringify({ token: TOKEN || undefined, title }),
   });
-  if (r.ok) { $("title-h").textContent = title; rememberGame(GID, title, TOKEN); toast("Title saved"); }
+  if (r.ok) {
+    $("title-h").textContent = title;
+    if (TOKEN) rememberGame(GID, title, TOKEN);
+    toast("Title saved");
+  }
   else toast("Couldn't save title");
 });
 
@@ -194,7 +200,7 @@ $("savenames").addEventListener("click", async () => {
   const r = await fetch(`/api/games/${GID}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ token: TOKEN, names: namePool() }),
+    body: JSON.stringify({ token: TOKEN || undefined, names: namePool() }),
   });
   if (r.ok) { game.names = namePool(); toast("Name pool saved"); }
   else toast("Couldn't save pool");
@@ -313,7 +319,7 @@ async function buildCard(q, index) {
     btn.disabled = true; btn.textContent = "Saving…";
     try {
       const fd = new FormData();
-      fd.append("token", TOKEN);
+      if (TOKEN) fd.append("token", TOKEN);
       fd.append("pixel_size", pix.value);
       fd.append("options", JSON.stringify(st.options));
       fd.append("correct_index", String(st.correct));
@@ -331,7 +337,7 @@ async function buildCard(q, index) {
 
   card.querySelector(".delq").addEventListener("click", async () => {
     if (!confirm("Delete this question? This can't be undone.")) return;
-    const r = await fetch(`/api/questions/${q.id}?token=${encodeURIComponent(TOKEN)}`, { method: "DELETE" });
+    const r = await fetch(`/api/questions/${q.id}${tokenParam}`, { method: "DELETE" });
     if (r.ok) {
       game.questions = game.questions.filter((x) => x.id !== q.id);
       renderAll();
@@ -355,7 +361,7 @@ async function move(qid, delta) {
   await fetch(`/api/games/${GID}/reorder`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ token: TOKEN, order }),
+    body: JSON.stringify({ token: TOKEN || undefined, order }),
   });
 }
 
@@ -432,10 +438,10 @@ $("addq").addEventListener("click", async () => {
     fd.append("pixel_size", $("pix").value);
     fd.append("options", JSON.stringify(options));
     fd.append("correct_index", String(correct));
-    fd.append("token", TOKEN);
+    if (TOKEN) fd.append("token", TOKEN);
     const r = await fetch(`/api/games/${GID}/questions`, { method: "POST", body: fd });
     if (!r.ok) throw new Error();
-    const ar = await fetch(`/api/games/${GID}/admin?token=${encodeURIComponent(TOKEN)}`);
+    const ar = await fetch(`/api/games/${GID}/admin${tokenParam}`);
     game = await ar.json();
     resetAdd();
     await renderAll();

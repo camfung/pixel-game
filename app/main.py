@@ -8,15 +8,19 @@ never sent to a player before they answer.
 
 import io
 import json
+import os
 import secrets
 import sqlite3
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, Response
+from authlib.integrations.starlette_client import OAuth, OAuthError
+from dotenv import load_dotenv
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageOps
+from starlette.middleware.sessions import SessionMiddleware
 
 BASE = Path(__file__).resolve().parent.parent
 DATA = BASE / "data"
@@ -30,7 +34,25 @@ for d in (DATA, UPLOADS, CACHE):
 SERVE_MAX = 1100  # longest side (px) of any served image
 MIN_BLOCKS, MAX_BLOCKS = 3, 160  # pixelation resolution bounds (blocks across)
 
+# --------------------------------------------------------------------- auth cfg
+load_dotenv(BASE / ".env")
+SECRET_KEY = os.environ.get("SECRET_KEY") or "dev-insecure-change-me"
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+AUTH_ENABLED = bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
+
 app = FastAPI(title="Pixel Reveal")
+app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="lax", https_only=False)
+
+oauth = OAuth()
+if AUTH_ENABLED:
+    oauth.register(
+        name="google",
+        client_id=GOOGLE_CLIENT_ID,
+        client_secret=GOOGLE_CLIENT_SECRET,
+        server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
+        client_kwargs={"scope": "openid email profile"},
+    )
 
 
 # --------------------------------------------------------------------------- db
@@ -85,6 +107,10 @@ def init_db():
             c.execute("ALTER TABLE games ADD COLUMN edit_token TEXT")
         if "names_json" not in cols:
             c.execute("ALTER TABLE games ADD COLUMN names_json TEXT")
+        if "owner_sub" not in cols:
+            c.execute("ALTER TABLE games ADD COLUMN owner_sub TEXT")
+        if "owner_name" not in cols:
+            c.execute("ALTER TABLE games ADD COLUMN owner_name TEXT")
 
 
 init_db()
@@ -133,14 +159,16 @@ def bust_cache(qid: int):
 
 
 # --------------------------------------------------------------------- ownership
-def require_owner(c, gid: str, token: str | None):
-    """Raise unless `token` matches the game's edit_token. Returns the game row."""
+def require_owner(c, gid: str, token: str | None, user: dict | None = None):
+    """Return the game row if the caller owns it — via edit_token or Google account."""
     g = c.execute("SELECT * FROM games WHERE id=?", (gid,)).fetchone()
     if not g:
         raise HTTPException(404, "game not found")
-    if not token or token != g["edit_token"]:
-        raise HTTPException(403, "not authorised to edit this game")
-    return g
+    if user and g["owner_sub"] and user.get("sub") == g["owner_sub"]:
+        return g
+    if token and token == g["edit_token"]:
+        return g
+    raise HTTPException(403, "not authorised to edit this game")
 
 
 def _validate_opts(options: str, correct_index: int):
@@ -173,17 +201,99 @@ def _clean_names(v) -> list[str]:
     return out[:300]
 
 
+# -------------------------------------------------------------------- api: auth
+def current_user(request: Request) -> dict | None:
+    return request.session.get("user")
+
+
+@app.get("/api/me")
+def whoami(request: Request):
+    return {"enabled": AUTH_ENABLED, "user": current_user(request)}
+
+
+@app.get("/auth/login")
+async def auth_login(request: Request, next: str = "/"):
+    if not AUTH_ENABLED:
+        raise HTTPException(503, "Google login is not configured on this server")
+    # only same-site relative paths — never redirect off to another origin post-login
+    request.session["post_login"] = next if next.startswith("/") and not next.startswith("//") else "/"
+    return await oauth.google.authorize_redirect(request, request.url_for("auth_callback"))
+
+
+@app.get("/auth/callback")
+async def auth_callback(request: Request):
+    if not AUTH_ENABLED:
+        raise HTTPException(503, "Google login is not configured on this server")
+    try:
+        token = await oauth.google.authorize_access_token(request)
+    except OAuthError:
+        return RedirectResponse("/?login=failed")
+    info = token.get("userinfo") or {}
+    if not info.get("sub"):
+        return RedirectResponse("/?login=failed")
+    request.session["user"] = {
+        "sub": info["sub"],
+        "name": info.get("name") or info.get("email") or "Player",
+        "email": info.get("email"),
+        "picture": info.get("picture"),
+    }
+    return RedirectResponse(request.session.pop("post_login", "/"))
+
+
+@app.get("/auth/logout")
+def auth_logout(request: Request):
+    request.session.pop("user", None)
+    return RedirectResponse("/")
+
+
+@app.get("/api/mygames")
+def my_games(request: Request):
+    """Games owned by the signed-in Google account (empty when not logged in)."""
+    user = current_user(request)
+    if not user:
+        return {"games": []}
+    with db() as c:
+        rows = c.execute(
+            "SELECT id, title, edit_token, created_at FROM games"
+            " WHERE owner_sub=? ORDER BY created_at DESC",
+            (user["sub"],),
+        ).fetchall()
+    return {"games": [dict(r) for r in rows]}
+
+
+@app.get("/api/browse")
+def browse():
+    """Public directory of every published game (>= 1 question), newest first."""
+    with db() as c:
+        rows = c.execute(
+            """
+            SELECT g.id, g.title, g.owner_name, g.created_at,
+                   (SELECT COUNT(*) FROM questions q WHERE q.game_id=g.id) AS question_count,
+                   (SELECT COUNT(*) FROM plays p    WHERE p.game_id=g.id) AS play_count,
+                   (SELECT id FROM questions q WHERE q.game_id=g.id
+                      ORDER BY position LIMIT 1)                          AS cover_qid
+            FROM games g
+            ORDER BY g.created_at DESC
+            LIMIT 300
+            """
+        ).fetchall()
+    return {"games": [dict(r) for r in rows if r["question_count"] > 0]}
+
+
 # ------------------------------------------------------------------- api: build
 @app.post("/api/games")
-def create_game(payload: dict):
+def create_game(payload: dict, request: Request):
     title = (payload.get("title") or "Untitled game").strip()[:120]
     names = _clean_names(payload.get("names"))
+    user = current_user(request)
     gid = secrets.token_hex(4)
     token = secrets.token_hex(16)
     with db() as c:
         c.execute(
-            "INSERT INTO games (id, title, created_at, edit_token, names_json) VALUES (?,?,?,?,?)",
-            (gid, title, time.time(), token, json.dumps(names)),
+            "INSERT INTO games (id, title, created_at, edit_token, names_json, owner_sub, owner_name)"
+            " VALUES (?,?,?,?,?,?,?)",
+            (gid, title, time.time(), token, json.dumps(names),
+             user["sub"] if user else None, user["name"] if user else None),
         )
     return {"id": gid, "title": title, "edit_token": token, "names": names}
 
@@ -191,14 +301,15 @@ def create_game(payload: dict):
 @app.post("/api/games/{gid}/questions")
 async def add_question(
     gid: str,
+    request: Request,
     image: UploadFile = File(...),
     pixel_size: int = Form(...),
     options: str = Form(...),
     correct_index: int = Form(...),
-    token: str = Form(...),
+    token: str | None = Form(None),
 ):
     with db() as c:
-        require_owner(c, gid, token)
+        require_owner(c, gid, token, current_user(request))
         opts = _validate_opts(options, correct_index)
         ext = _ext_of(image.filename)
 
@@ -229,10 +340,10 @@ async def add_question(
 
 # -------------------------------------------------------------------- api: edit
 @app.get("/api/games/{gid}/admin")
-def admin_game(gid: str, token: str):
+def admin_game(gid: str, request: Request, token: str | None = None):
     """Owner view — includes correct answers and pixel sizes for editing."""
     with db() as c:
-        g = require_owner(c, gid, token)
+        g = require_owner(c, gid, token, current_user(request))
         qs = c.execute(
             "SELECT id, position, ext, pixel_size, options_json, correct_index"
             " FROM questions WHERE game_id=? ORDER BY position",
@@ -257,10 +368,10 @@ def admin_game(gid: str, token: str):
 
 
 @app.patch("/api/games/{gid}")
-def update_game(gid: str, payload: dict):
+def update_game(gid: str, payload: dict, request: Request):
     title = (payload.get("title") or "").strip()[:120]
     with db() as c:
-        require_owner(c, gid, payload.get("token"))
+        require_owner(c, gid, payload.get("token"), current_user(request))
         if title:
             c.execute("UPDATE games SET title=? WHERE id=?", (title, gid))
         if "names" in payload:
@@ -272,7 +383,8 @@ def update_game(gid: str, payload: dict):
 @app.patch("/api/questions/{qid}")
 async def update_question(
     qid: int,
-    token: str = Form(...),
+    request: Request,
+    token: str | None = Form(None),
     pixel_size: int = Form(...),
     options: str = Form(...),
     correct_index: int = Form(...),
@@ -282,7 +394,7 @@ async def update_question(
         q = c.execute("SELECT * FROM questions WHERE id=?", (qid,)).fetchone()
         if not q:
             raise HTTPException(404, "question not found")
-        require_owner(c, q["game_id"], token)
+        require_owner(c, q["game_id"], token, current_user(request))
         opts = _validate_opts(options, correct_index)
 
     ext = q["ext"]
@@ -312,12 +424,12 @@ async def update_question(
 
 
 @app.delete("/api/questions/{qid}")
-def delete_question(qid: int, token: str):
+def delete_question(qid: int, request: Request, token: str | None = None):
     with db() as c:
         q = c.execute("SELECT game_id, ext FROM questions WHERE id=?", (qid,)).fetchone()
         if not q:
             raise HTTPException(404, "question not found")
-        require_owner(c, q["game_id"], token)
+        require_owner(c, q["game_id"], token, current_user(request))
         c.execute("DELETE FROM questions WHERE id=?", (qid,))
     (UPLOADS / f"{qid}.{q['ext']}").unlink(missing_ok=True)
     bust_cache(qid)
@@ -325,10 +437,10 @@ def delete_question(qid: int, token: str):
 
 
 @app.post("/api/games/{gid}/reorder")
-def reorder_questions(gid: str, payload: dict):
+def reorder_questions(gid: str, payload: dict, request: Request):
     order = payload.get("order") or []
     with db() as c:
-        require_owner(c, gid, payload.get("token"))
+        require_owner(c, gid, payload.get("token"), current_user(request))
         for pos, qid in enumerate(order):
             c.execute(
                 "UPDATE questions SET position=? WHERE id=? AND game_id=?",
@@ -504,6 +616,11 @@ def _page(name: str) -> FileResponse:
 @app.get("/")
 def index():
     return _page("index.html")
+
+
+@app.get("/browse")
+def browse_page():
+    return _page("browse.html")
 
 
 @app.get("/g/{gid}")
