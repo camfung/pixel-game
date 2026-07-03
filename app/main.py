@@ -837,7 +837,12 @@ def _social_meta(request: Request, gid: str) -> str:
             "SELECT COUNT(*) AS n FROM questions WHERE game_id=?", (gid,)
         ).fetchone()["n"]
 
-    base = str(request.base_url).rstrip("/")  # honours proxy scheme/host
+    # Behind nginx, uvicorn ignores forwarded headers (proxy isn't in its
+    # trusted IPs), so request.base_url would say http. Honour the proxy's
+    # X-Forwarded-Proto so og:image/og:url use https on the real site.
+    proto = request.headers.get("x-forwarded-proto", request.url.scheme).split(",")[0].strip()
+    host = request.headers.get("host") or request.url.netloc
+    base = f"{proto}://{host}"
     title = g["title"] or "Pixelizer"
     if n:
         blurb = (f"Guess {n} pixelated image{'s' if n != 1 else ''}. "
