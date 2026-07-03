@@ -6,6 +6,7 @@ and land on a leaderboard. Pixelation happens server-side so the crisp image is
 never sent to a player before they answer.
 """
 
+import html
 import io
 import json
 import os
@@ -17,7 +18,7 @@ from pathlib import Path
 from authlib.integrations.starlette_client import OAuth, OAuthError
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageOps
 from starlette.middleware.sessions import SessionMiddleware
@@ -820,9 +821,56 @@ def admin_panel_page():
     return _page("admin.html")
 
 
+def _social_meta(request: Request, gid: str) -> str:
+    """Open Graph / Twitter Card tags so a shared /g/<id> link unfurls in
+    WhatsApp, Discord, iMessage, etc. with the game's title, a blurb, and the
+    pixelated cover image. Returns '' for an unknown game so the page still loads."""
+    with db() as c:
+        g = c.execute("SELECT title FROM games WHERE id=?", (gid,)).fetchone()
+        if not g:
+            return ""
+        cover = c.execute(
+            "SELECT id FROM questions WHERE game_id=? ORDER BY position LIMIT 1",
+            (gid,),
+        ).fetchone()
+        n = c.execute(
+            "SELECT COUNT(*) AS n FROM questions WHERE game_id=?", (gid,)
+        ).fetchone()["n"]
+
+    base = str(request.base_url).rstrip("/")  # honours proxy scheme/host
+    title = g["title"] or "Pixelizer"
+    if n:
+        blurb = (f"Guess {n} pixelated image{'s' if n != 1 else ''}. "
+                 "Each one starts blocky — pick the right answer before it sharpens into view.")
+    else:
+        blurb = "A pixelated-image guessing game. Each image starts blocky — guess before it reveals."
+    page_url = f"{base}/g/{gid}"
+    image = f"{base}/api/questions/{cover['id']}/pixel.png" if cover else f"{base}/static/favicon.svg"
+
+    et, eb, eu, ei = (html.escape(title, True), html.escape(blurb, True),
+                      html.escape(page_url, True), html.escape(image, True))
+    return (
+        f'<meta property="og:type" content="website">\n'
+        f'<meta property="og:site_name" content="Pixelizer">\n'
+        f'<meta property="og:title" content="{et}">\n'
+        f'<meta property="og:description" content="{eb}">\n'
+        f'<meta property="og:url" content="{eu}">\n'
+        f'<meta property="og:image" content="{ei}">\n'
+        f'<meta name="twitter:card" content="summary_large_image">\n'
+        f'<meta name="twitter:title" content="{et}">\n'
+        f'<meta name="twitter:description" content="{eb}">\n'
+        f'<meta name="twitter:image" content="{ei}">\n'
+        f'<meta name="description" content="{eb}">\n'
+    )
+
+
 @app.get("/g/{gid}")
-def play_page(gid: str):
-    return _page("play.html")
+def play_page(gid: str, request: Request):
+    html_text = (STATIC / "play.html").read_text(encoding="utf-8")
+    meta = _social_meta(request, gid)
+    if meta:  # inject right after the <title>…</title> line so crawlers see it
+        html_text = html_text.replace("</title>", "</title>\n" + meta, 1)
+    return HTMLResponse(html_text)
 
 
 @app.get("/g/{gid}/results")
