@@ -11,6 +11,7 @@ import io
 import json
 import math
 import os
+import random
 import secrets
 import sqlite3
 import time
@@ -235,19 +236,18 @@ def _pixel_cell(qid: int, ext: str, blocks: int, side: int,
 
 
 def collage_png(gid: str) -> bytes | None:
-    """A grid of the first up-to-9 pixelated images for a game — used as the
-    social share preview. Cached on disk; None when the game has no questions."""
-    path = CACHE / f"collage_{gid}_{IMG_VER}.png"
-    if path.exists():
-        return path.read_bytes()
+    """A grid of up to 9 pixelated images for a game — the social share preview.
+    A fresh random selection/order is built on every call (not cached), so each
+    time a link is unfurled the collage looks different. None when no questions."""
     with db() as c:
-        qs = c.execute(
-            "SELECT id, ext, pixel_size, crop_x, crop_y FROM questions"
-            " WHERE game_id=? ORDER BY position LIMIT ?",
-            (gid, COLLAGE_MAX),
+        rows = c.execute(
+            "SELECT id, ext, pixel_size, crop_x, crop_y FROM questions WHERE game_id=?",
+            (gid,),
         ).fetchall()
-    if not qs:
+    if not rows:
         return None
+    # random.sample gives both a random subset and a random order
+    qs = random.sample(rows, min(len(rows), COLLAGE_MAX))
 
     n = len(qs)
     cols = math.ceil(math.sqrt(n))
@@ -269,13 +269,7 @@ def collage_png(gid: str) -> bytes | None:
 
     buf = io.BytesIO()
     canvas.save(buf, "PNG")
-    path.write_bytes(buf.getvalue())
-    return path.read_bytes()
-
-
-def bust_game_collage(gid: str):
-    for p in CACHE.glob(f"collage_{gid}_*.png"):
-        p.unlink(missing_ok=True)
+    return buf.getvalue()
 
 
 # --------------------------------------------------------------------- ownership
@@ -473,7 +467,6 @@ async def add_question(
         with db() as c:
             c.execute("DELETE FROM questions WHERE id=?", (qid,))
         raise HTTPException(400, "could not process image")
-    bust_game_collage(gid)
     return {"question_id": qid}
 
 
@@ -566,7 +559,6 @@ async def update_question(
         )
 
     bust_cache(qid)
-    bust_game_collage(q["game_id"])
     try:
         pixel_png(qid, ext, int(pixel_size), cx, cy)
         crisp_png(qid, ext, cx, cy)
@@ -585,7 +577,6 @@ def delete_question(qid: int, request: Request, token: str | None = None):
         c.execute("DELETE FROM questions WHERE id=?", (qid,))
     (UPLOADS / f"{qid}.{q['ext']}").unlink(missing_ok=True)
     bust_cache(qid)
-    bust_game_collage(q["game_id"])
     return {"ok": True}
 
 
@@ -599,7 +590,6 @@ def reorder_questions(gid: str, payload: dict, request: Request):
                 "UPDATE questions SET position=? WHERE id=? AND game_id=?",
                 (pos, int(qid), gid),
             )
-    bust_game_collage(gid)  # order changed -> which 9 images (and their layout) may differ
     return {"ok": True}
 
 
@@ -647,8 +637,9 @@ def get_collage(gid: str):
     data = collage_png(gid)
     if data is None:
         raise HTTPException(404, "no images")
+    # no-store so every unfurl re-fetches and gets a fresh random arrangement
     return Response(data, media_type="image/png",
-                    headers={"Cache-Control": "public, max-age=3600"})
+                    headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/questions/{qid}/crisp.png")
@@ -787,7 +778,6 @@ def admin_delete_game(gid: str, request: Request):
     for q in qs:
         (UPLOADS / f"{q['id']}.{q['ext']}").unlink(missing_ok=True)
         bust_cache(q["id"])
-    bust_game_collage(gid)
     return {"ok": True}
 
 
