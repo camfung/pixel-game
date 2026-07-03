@@ -1,4 +1,4 @@
-// ---- Pixel Reveal — question editor ----
+// ---- Pixelizer — question editor ----
 const LOGO_COLORS = [
   "#1d2b1f", "#bfea4b", "#1d2b1f",
   "#bfea4b", "#c53a20", "#bfea4b",
@@ -50,6 +50,8 @@ function parseNames(text) {
 }
 const namePool = () => parseNames($("names").value);
 const nChoices = () => parseInt($("nchoices").value, 10);
+const answerMode = () =>
+  (document.querySelector('input[name="answermode"]:checked') || {}).value || "choices";
 
 function shuffle(a) {
   const arr = a.slice();
@@ -160,6 +162,8 @@ let game = null;
   $("title-h").textContent = game.title;
   $("gtitle").value = game.title;
   $("names").value = (game.names || []).join("\n");
+  const modeRadio = document.querySelector(`input[name="answermode"][value="${game.answer_mode || "choices"}"]`);
+  if (modeRadio) modeRadio.checked = true;
   refreshNameCount();
   $("playlink").href = `/g/${GID}`;
   $("statslink").href = `/g/${GID}/results`;
@@ -200,10 +204,10 @@ $("savenames").addEventListener("click", async () => {
   const r = await fetch(`/api/games/${GID}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ token: TOKEN || undefined, names: namePool() }),
+    body: JSON.stringify({ token: TOKEN || undefined, names: namePool(), answer_mode: answerMode() }),
   });
-  if (r.ok) { game.names = namePool(); toast("Name pool saved"); }
-  else toast("Couldn't save pool");
+  if (r.ok) { game.names = namePool(); game.answer_mode = answerMode(); toast("Settings saved"); }
+  else toast("Couldn't save settings");
 });
 
 $("copyshare").addEventListener("click", async () => {

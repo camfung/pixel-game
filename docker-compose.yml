@@ -1,8 +1,8 @@
 services:
-  pixel-reveal:
+  pixelizer:
     build: .
-    image: pixel-reveal
-    container_name: pixel-reveal
+    image: pixelizer
+    container_name: pixelizer
     ports:
       - "${PORT:-8777}:8777"
     environment:

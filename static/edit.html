@@ -1,6 +1,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pixel Reveal — Edit</title>
+<title>Pixelizer — Edit</title>
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/static/style.css">
 
@@ -8,7 +8,7 @@
   <div class="topbar">
     <div class="brand">
       <div class="logo" id="logo"></div>
-      <div class="name">PIXEL REVEAL<small>editor</small></div>
+      <div class="name">PIXELIZER<small>editor</small></div>
     </div>
     <a class="arrow-link" href="/">Build new</a>
   </div>
@@ -44,6 +44,13 @@
       </div>
       <label for="names">One name per line (or comma-separated)</label>
       <textarea id="names" rows="5" placeholder="Rahim&#10;Bilal&#10;Omar"></textarea>
+      <hr class="sep">
+      <label>How players answer</label>
+      <div class="radio-hint">Buttons show every choice at once · a dropdown hides them in a menu.</div>
+      <div class="answer-modes">
+        <label class="opt-row"><input type="radio" name="answermode" value="choices" checked> Multiple-choice buttons</label>
+        <label class="opt-row"><input type="radio" name="answermode" value="select"> Dropdown select box</label>
+      </div>
       <div class="row spread" style="margin-top: var(--space-md); align-items: flex-end;">
         <div style="max-width: 260px; flex:1;">
           <label for="nchoices">Choices per new image</label>
@@ -52,7 +59,7 @@
             <span class="val" id="nchoicesval">4</span>
           </div>
         </div>
-        <button class="btn-primary" id="savenames">Save pool</button>
+        <button class="btn-primary" id="savenames">Save settings</button>
       </div>
     </div>
 

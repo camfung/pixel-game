@@ -1,4 +1,4 @@
-// ---- Pixel Reveal — site admin: list and delete any game ----
+// ---- Pixelizer — site admin: list and delete any game ----
 // Gate: the value of localStorage["12321"] is sent as X-Admin-Token on every
 // request; the server decides whether it is right. Without it the page shows
 // nothing and the API answers 404, so there is no admin surface to probe.

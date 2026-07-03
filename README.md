@@ -6,7 +6,7 @@ tags:
   - webapp
 ---
 
-# Pixel Reveal
+# Pixelizer
 
 A pixelated-image multiple-choice guessing game. Build a game by uploading images,
 set how pixelated each one starts, write the answer choices — then share a link.

@@ -1,4 +1,4 @@
-// ---- Pixel Reveal — player ----
+// ---- Pixelizer — player ----
 const LOGO_COLORS = [
   "#1d2b1f", "#bfea4b", "#1d2b1f",
   "#bfea4b", "#c53a20", "#bfea4b",
@@ -73,25 +73,63 @@ function renderProgress() {
     .join("");
 }
 
+const selectMode = () => game.answer_mode === "select";
+
 function loadQuestion() {
   locked = false;
   const q = game.questions[idx];
   const shot = $("shot");
   shot.classList.remove("crisp");
   shot.src = `/api/questions/${q.id}/pixel.png`;
-  $("hint").textContent = "Tap your guess";
   hide("next");
 
   const box = $("choices");
   box.innerHTML = "";
-  q.options.forEach((opt, i) => {
-    const b = document.createElement("button");
-    b.className = "choice";
-    b.textContent = opt;
-    b.addEventListener("click", () => pick(i, b));
-    box.appendChild(b);
-  });
+  box.classList.toggle("as-select", selectMode());
+  if (selectMode()) {
+    $("hint").textContent = "Pick from the list, then guess";
+    const sel = document.createElement("select");
+    sel.className = "guess-select";
+    sel.innerHTML =
+      `<option value="" disabled selected>Choose an answer…</option>` +
+      q.options.map((opt, i) => `<option value="${i}">${escapeHtml(opt)}</option>`).join("");
+    const go = document.createElement("button");
+    go.className = "btn-primary guess-go";
+    go.textContent = "Guess";
+    go.disabled = true;
+    sel.addEventListener("change", () => { go.disabled = sel.value === ""; });
+    go.addEventListener("click", () => {
+      if (sel.value !== "") pickSelect(parseInt(sel.value, 10), sel, go);
+    });
+    box.appendChild(sel);
+    box.appendChild(go);
+  } else {
+    $("hint").textContent = "Tap your guess";
+    q.options.forEach((opt, i) => {
+      const b = document.createElement("button");
+      b.className = "choice";
+      b.textContent = opt;
+      b.addEventListener("click", () => pick(i, b));
+      box.appendChild(b);
+    });
+  }
   renderProgress();
+}
+
+// fetch the correct answer only once a guess is committed
+async function fetchCorrect(q) {
+  try {
+    const r = await fetch(`/api/questions/${q.id}/answer`);
+    return (await r.json()).correct_index;
+  } catch (_) { return -1; }
+}
+
+function finishGuess(q) {
+  const shot = $("shot");
+  shot.classList.add("crisp");
+  shot.src = `/api/questions/${q.id}/crisp.png`;
+  $("next").textContent = idx + 1 < game.questions.length ? "Next →" : "Finish →";
+  show("next");
 }
 
 async function pick(choiceIdx, btn) {
@@ -100,13 +138,7 @@ async function pick(choiceIdx, btn) {
   const q = game.questions[idx];
   myAnswers.push({ question_id: q.id, chosen_index: choiceIdx });
 
-  // fetch the correct answer only now that a guess is committed
-  let correct = -1;
-  try {
-    const r = await fetch(`/api/questions/${q.id}/answer`);
-    correct = (await r.json()).correct_index;
-  } catch (_) {}
-
+  const correct = await fetchCorrect(q);
   const buttons = [...$("choices").children];
   buttons.forEach((b) => (b.disabled = true));
   if (choiceIdx === correct) {
@@ -118,14 +150,26 @@ async function pick(choiceIdx, btn) {
     if (buttons[correct]) buttons[correct].classList.add("correct");
     $("hint").textContent = "Not quite — here's the real one.";
   }
+  finishGuess(q);
+}
 
-  // reveal crisp image
-  const shot = $("shot");
-  shot.classList.add("crisp");
-  shot.src = `/api/questions/${q.id}/crisp.png`;
+async function pickSelect(choiceIdx, sel, go) {
+  if (locked) return;
+  locked = true;
+  const q = game.questions[idx];
+  myAnswers.push({ question_id: q.id, chosen_index: choiceIdx });
 
-  $("next").textContent = idx + 1 < game.questions.length ? "Next →" : "Finish →";
-  show("next");
+  const correct = await fetchCorrect(q);
+  sel.disabled = true;
+  go.disabled = true;
+  if (choiceIdx === correct) {
+    localScore++;
+    $("hint").textContent = "Correct!";
+  } else {
+    const answer = q.options[correct] != null ? q.options[correct] : "";
+    $("hint").textContent = `Not quite — it's ${answer}.`;
+  }
+  finishGuess(q);
 }
 
 $("next").addEventListener("click", () => {
@@ -134,6 +178,10 @@ $("next").addEventListener("click", () => {
     loadQuestion();
   } else {
     hide("game");
+    // Lock the game as played the moment it's finished, before the name is
+    // submitted — a refresh here shouldn't let the player replay. Overwritten
+    // with the server-confirmed score + name once they submit.
+    localStorage.setItem(PLAYED_KEY, JSON.stringify({ name: null, score: localScore, total: game.questions.length }));
     $("rawscore").innerHTML = `${localScore}<span> / ${game.questions.length}</span>`;
     show("finish");
   }

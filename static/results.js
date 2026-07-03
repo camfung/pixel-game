@@ -1,4 +1,4 @@
-// ---- Pixel Reveal — live stats / leaderboard ----
+// ---- Pixelizer — live stats / leaderboard ----
 const LOGO_COLORS = [
   "#1d2b1f", "#bfea4b", "#1d2b1f",
   "#bfea4b", "#c53a20", "#bfea4b",

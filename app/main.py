@@ -1,4 +1,4 @@
-"""Pixel Reveal — a pixelated-image multiple-choice guessing game.
+"""Pixelizer — a pixelated-image multiple-choice guessing game.
 
 Builders upload images, pick a pixelation resolution per image, and define
 multiple-choice options. Players get a share link, guess each pixelated image,
@@ -44,7 +44,7 @@ AUTH_ENABLED = bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
 # and the server compares against this, so the value never ships in served JS.
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN") or "aoeisrtn9102"
 
-app = FastAPI(title="Pixel Reveal")
+app = FastAPI(title="Pixelizer")
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="lax", https_only=False)
 
 oauth = OAuth()
@@ -114,6 +114,8 @@ def init_db():
             c.execute("ALTER TABLE games ADD COLUMN owner_sub TEXT")
         if "owner_name" not in cols:
             c.execute("ALTER TABLE games ADD COLUMN owner_name TEXT")
+        if "answer_mode" not in cols:
+            c.execute("ALTER TABLE games ADD COLUMN answer_mode TEXT")
 
 
 init_db()
@@ -189,6 +191,15 @@ def _validate_opts(options: str, correct_index: int):
 def _ext_of(filename: str | None) -> str:
     ext = (filename or "img.png").rsplit(".", 1)[-1].lower()
     return ext if ext in ("png", "jpg", "jpeg", "webp", "gif", "bmp") else "png"
+
+
+# How players answer each question: multiple-choice buttons or a dropdown.
+ANSWER_MODES = ("choices", "select")
+
+
+def _clean_answer_mode(v) -> str:
+    m = str(v or "").strip().lower()
+    return m if m in ANSWER_MODES else "choices"
 
 
 def _clean_names(v) -> list[str]:
@@ -288,17 +299,18 @@ def browse():
 def create_game(payload: dict, request: Request):
     title = (payload.get("title") or "Untitled game").strip()[:120]
     names = _clean_names(payload.get("names"))
+    answer_mode = _clean_answer_mode(payload.get("answer_mode"))
     user = current_user(request)
     gid = secrets.token_hex(4)
     token = secrets.token_hex(16)
     with db() as c:
         c.execute(
-            "INSERT INTO games (id, title, created_at, edit_token, names_json, owner_sub, owner_name)"
-            " VALUES (?,?,?,?,?,?,?)",
+            "INSERT INTO games (id, title, created_at, edit_token, names_json, owner_sub, owner_name, answer_mode)"
+            " VALUES (?,?,?,?,?,?,?,?)",
             (gid, title, time.time(), token, json.dumps(names),
-             user["sub"] if user else None, user["name"] if user else None),
+             user["sub"] if user else None, user["name"] if user else None, answer_mode),
         )
-    return {"id": gid, "title": title, "edit_token": token, "names": names}
+    return {"id": gid, "title": title, "edit_token": token, "names": names, "answer_mode": answer_mode}
 
 
 @app.post("/api/games/{gid}/questions")
@@ -357,6 +369,7 @@ def admin_game(gid: str, request: Request, token: str | None = None):
         "title": g["title"],
         "edit_token": g["edit_token"],
         "names": json.loads(g["names_json"]) if g["names_json"] else [],
+        "answer_mode": g["answer_mode"] or "choices",
         "questions": [
             {
                 "id": q["id"],
@@ -380,6 +393,9 @@ def update_game(gid: str, payload: dict, request: Request):
         if "names" in payload:
             c.execute("UPDATE games SET names_json=? WHERE id=?",
                       (json.dumps(_clean_names(payload.get("names"))), gid))
+        if "answer_mode" in payload:
+            c.execute("UPDATE games SET answer_mode=? WHERE id=?",
+                      (_clean_answer_mode(payload.get("answer_mode")), gid))
     return {"ok": True}
 
 
@@ -467,6 +483,7 @@ def get_game(gid: str):
     return {
         "id": g["id"],
         "title": g["title"],
+        "answer_mode": g["answer_mode"] or "choices",
         "questions": [
             {"id": q["id"], "options": json.loads(q["options_json"])} for q in qs
         ],

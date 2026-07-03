@@ -1,5 +1,5 @@
 /* =========================================================
-   PIXEL REVEAL — neo-brutalist theme (Pixelizer palette)
+   PIXELIZER — neo-brutalist theme (Pixelizer palette)
    cream paper · forest-green ink · lime accent · hard shadows
    ========================================================= */
 
@@ -313,6 +313,10 @@ input[type=range]::-moz-range-thumb {
 .choice.wrong { background: var(--terra); border-color: var(--ink); color: var(--card); }
 .choice:disabled { cursor: default; transform: none; box-shadow: var(--shadow-btn); opacity: 1; color: var(--ink); }
 .choice.wrong:disabled { color: var(--card); }
+/* dropdown answer mode */
+.choices.as-select { display: block; }
+.guess-select { width: 100%; font-size: 16px; padding: 13px 15px; }
+.guess-go { width: 100%; margin-top: var(--space-md); }
 
 .progress { display: flex; gap: 6px; justify-content: center; margin-bottom: var(--space-lg); }
 .progress .dot { width: 30px; height: 8px; border-radius: 999px; background: var(--surface); border: 1.5px solid var(--ink); transition: background .2s ease; }

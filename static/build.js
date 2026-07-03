@@ -1,4 +1,4 @@
-// ---- Pixel Reveal — game builder ----
+// ---- Pixelizer — game builder ----
 const LOGO_COLORS = [
   "#1d2b1f", "#bfea4b", "#1d2b1f",
   "#bfea4b", "#c53a20", "#bfea4b",
@@ -33,6 +33,8 @@ function parseNames(text) {
 }
 const namePool = () => parseNames($("names").value);
 const nChoices = () => parseInt($("nchoices").value, 10);
+const answerMode = () =>
+  (document.querySelector('input[name="answermode"]:checked') || {}).value || "choices";
 
 function shuffle(a) {
   const arr = a.slice();
@@ -203,7 +205,7 @@ $("publish").addEventListener("click", async () => {
     const gres = await fetch("/api/games", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title, names: namePool() }),
+      body: JSON.stringify({ title, names: namePool(), answer_mode: answerMode() }),
     });
     if (!gres.ok) throw new Error("create game failed");
     const { id, edit_token } = await gres.json();
