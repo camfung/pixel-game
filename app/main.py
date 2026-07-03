@@ -31,8 +31,9 @@ DB_PATH = DATA / "games.db"
 for d in (DATA, UPLOADS, CACHE):
     d.mkdir(parents=True, exist_ok=True)
 
-SERVE_MAX = 1100  # longest side (px) of any served image
+SERVE_MAX = 1100  # side (px) of the square each served image is cropped to
 MIN_BLOCKS, MAX_BLOCKS = 3, 160  # pixelation resolution bounds (blocks across)
+IMG_VER = "sq1"  # bump to invalidate the on-disk image cache when processing changes
 
 # --------------------------------------------------------------------- auth cfg
 load_dotenv(BASE / ".env")
@@ -43,6 +44,31 @@ AUTH_ENABLED = bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
 # Site-admin token: the admin page sends localStorage["12321"] as X-Admin-Token
 # and the server compares against this, so the value never ships in served JS.
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN") or "aoeisrtn9102"
+
+# Version stamp shown in the page footer so a deploy is visibly confirmable.
+# The start time changes on every deploy (the process restarts); the git short
+# SHA is a best-effort extra that's absent in images built without .git.
+APP_STARTED = time.strftime("%Y-%m-%d %H:%M", time.gmtime())
+
+
+def _app_version() -> str:
+    v = os.environ.get("APP_VERSION", "").strip()
+    if v:
+        return v
+    try:
+        import subprocess
+        out = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=BASE, capture_output=True, text=True, timeout=2,
+        )
+        if out.returncode == 0:
+            return out.stdout.strip()
+    except Exception:
+        pass
+    return ""
+
+
+APP_VERSION = _app_version()
 
 app = FastAPI(title="Pixelizer")
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="lax", https_only=False)
@@ -84,7 +110,9 @@ def init_db():
                 ext           TEXT NOT NULL,
                 pixel_size    INTEGER NOT NULL,
                 options_json  TEXT NOT NULL,
-                correct_index INTEGER NOT NULL
+                correct_index INTEGER NOT NULL,
+                crop_x        REAL,
+                crop_y        REAL
             );
             CREATE TABLE IF NOT EXISTS plays (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -100,7 +128,8 @@ def init_db():
                 play_id      INTEGER NOT NULL REFERENCES plays(id) ON DELETE CASCADE,
                 question_id  INTEGER NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
                 chosen_index INTEGER NOT NULL,
-                correct      INTEGER NOT NULL
+                correct      INTEGER NOT NULL,
+                chosen_name  TEXT
             );
             """
         )
@@ -116,51 +145,78 @@ def init_db():
             c.execute("ALTER TABLE games ADD COLUMN owner_name TEXT")
         if "answer_mode" not in cols:
             c.execute("ALTER TABLE games ADD COLUMN answer_mode TEXT")
+        qcols = [r["name"] for r in c.execute("PRAGMA table_info(questions)").fetchall()]
+        if "crop_x" not in qcols:  # focal point of the square crop, 0..1 (NULL -> 0.5)
+            c.execute("ALTER TABLE questions ADD COLUMN crop_x REAL")
+        if "crop_y" not in qcols:
+            c.execute("ALTER TABLE questions ADD COLUMN crop_y REAL")
+        acols = [r["name"] for r in c.execute("PRAGMA table_info(answers)").fetchall()]
+        if "chosen_name" not in acols:  # actual name guessed (older rows only stored the index)
+            c.execute("ALTER TABLE answers ADD COLUMN chosen_name TEXT")
 
 
 init_db()
 
 
 # -------------------------------------------------------------------- pixelate
-def _base_image(qid: int, ext: str) -> Image.Image:
-    """Crisp image, EXIF-rotated and downscaled so the longest side <= SERVE_MAX."""
+def _frac(v, default: float = 0.5) -> float:
+    """Clamp a crop focal fraction to [0, 1], falling back to centre."""
+    try:
+        return min(1.0, max(0.0, float(v)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _base_image(qid: int, ext: str, cx: float = 0.5, cy: float = 0.5) -> Image.Image:
+    """Crisp image, EXIF-rotated and cropped to a square <= SERVE_MAX around the
+    focal point (cx, cy) so every served image shares one aspect ratio."""
     im = Image.open(UPLOADS / f"{qid}.{ext}")
     im = (ImageOps.exif_transpose(im) or im).convert("RGB")
-    w, h = im.size
-    scale = min(1.0, SERVE_MAX / max(w, h))
-    if scale < 1.0:
-        im = im.resize((round(w * scale), round(h * scale)), Image.Resampling.LANCZOS)
-    return im
+    side = min(min(im.size), SERVE_MAX)
+    return ImageOps.fit(im, (side, side), Image.Resampling.LANCZOS,
+                        centering=(_frac(cx), _frac(cy)))
 
 
-def crisp_png(qid: int, ext: str) -> bytes:
-    path = CACHE / f"{qid}_crisp.png"
+def crisp_png(qid: int, ext: str, cx: float = 0.5, cy: float = 0.5) -> bytes:
+    path = CACHE / f"{qid}_crisp_{IMG_VER}.png"
     if not path.exists():
         buf = io.BytesIO()
-        _base_image(qid, ext).save(buf, "PNG")
+        _base_image(qid, ext, cx, cy).save(buf, "PNG")
         path.write_bytes(buf.getvalue())
     return path.read_bytes()
 
 
-def pixel_png(qid: int, ext: str, blocks: int) -> bytes:
-    path = CACHE / f"{qid}_pix.png"
+def pixel_png(qid: int, ext: str, blocks: int, cx: float = 0.5, cy: float = 0.5) -> bytes:
+    path = CACHE / f"{qid}_pix_{IMG_VER}.png"
     if not path.exists():
-        im = _base_image(qid, ext)
-        w, h = im.size
+        im = _base_image(qid, ext, cx, cy)  # square
+        side = im.size[0]
         blocks = max(MIN_BLOCKS, min(blocks, MAX_BLOCKS))
-        sw = max(1, blocks)
-        sh = max(1, round(h * sw / w))
-        small = im.resize((sw, sh), Image.Resampling.BILINEAR)  # average per block
-        out = small.resize((w, h), Image.Resampling.NEAREST)    # crisp blocks
+        small = im.resize((blocks, blocks), Image.Resampling.BILINEAR)  # average per block
+        out = small.resize((side, side), Image.Resampling.NEAREST)      # crisp blocks
         buf = io.BytesIO()
         out.save(buf, "PNG")
         path.write_bytes(buf.getvalue())
     return path.read_bytes()
 
 
+def source_png(qid: int, ext: str) -> bytes:
+    """Full (uncropped) image, EXIF-corrected and downscaled — owner-only, so the
+    edit UI can re-pick the square crop against the original framing."""
+    im = Image.open(UPLOADS / f"{qid}.{ext}")
+    im = (ImageOps.exif_transpose(im) or im).convert("RGB")
+    w, h = im.size
+    scale = min(1.0, SERVE_MAX / max(w, h))
+    if scale < 1.0:
+        im = im.resize((round(w * scale), round(h * scale)), Image.Resampling.LANCZOS)
+    buf = io.BytesIO()
+    im.save(buf, "PNG")
+    return buf.getvalue()
+
+
 def bust_cache(qid: int):
-    for suffix in ("_pix.png", "_crisp.png"):
-        (CACHE / f"{qid}{suffix}").unlink(missing_ok=True)
+    for p in CACHE.glob(f"{qid}_*.png"):  # every cached variant/version for this question
+        p.unlink(missing_ok=True)
 
 
 # --------------------------------------------------------------------- ownership
@@ -223,6 +279,11 @@ def current_user(request: Request) -> dict | None:
 @app.get("/api/me")
 def whoami(request: Request):
     return {"enabled": AUTH_ENABLED, "user": current_user(request)}
+
+
+@app.get("/api/version")
+def version():
+    return {"version": APP_VERSION, "started": APP_STARTED}
 
 
 @app.get("/auth/login")
@@ -322,7 +383,10 @@ async def add_question(
     options: str = Form(...),
     correct_index: int = Form(...),
     token: str | None = Form(None),
+    crop_x: float = Form(0.5),
+    crop_y: float = Form(0.5),
 ):
+    cx, cy = _frac(crop_x), _frac(crop_y)
     with db() as c:
         require_owner(c, gid, token, current_user(request))
         opts = _validate_opts(options, correct_index)
@@ -333,9 +397,9 @@ async def add_question(
             (gid,),
         ).fetchone()
         cur = c.execute(
-            "INSERT INTO questions (game_id, position, ext, pixel_size, options_json, correct_index)"
-            " VALUES (?,?,?,?,?,?)",
-            (gid, pos_row["p"], ext, int(pixel_size), json.dumps(opts), int(correct_index)),
+            "INSERT INTO questions (game_id, position, ext, pixel_size, options_json, correct_index, crop_x, crop_y)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            (gid, pos_row["p"], ext, int(pixel_size), json.dumps(opts), int(correct_index), cx, cy),
         )
         qid = cur.lastrowid
         assert qid is not None
@@ -344,8 +408,8 @@ async def add_question(
     (UPLOADS / f"{qid}.{ext}").write_bytes(data)
     # validate + warm the cache (raises early on a bad upload)
     try:
-        pixel_png(qid, ext, int(pixel_size))
-        crisp_png(qid, ext)
+        pixel_png(qid, ext, int(pixel_size), cx, cy)
+        crisp_png(qid, ext, cx, cy)
     except Exception:
         with db() as c:
             c.execute("DELETE FROM questions WHERE id=?", (qid,))
@@ -360,7 +424,7 @@ def admin_game(gid: str, request: Request, token: str | None = None):
     with db() as c:
         g = require_owner(c, gid, token, current_user(request))
         qs = c.execute(
-            "SELECT id, position, ext, pixel_size, options_json, correct_index"
+            "SELECT id, position, ext, pixel_size, options_json, correct_index, crop_x, crop_y"
             " FROM questions WHERE game_id=? ORDER BY position",
             (gid,),
         ).fetchall()
@@ -377,6 +441,8 @@ def admin_game(gid: str, request: Request, token: str | None = None):
                 "pixel_size": q["pixel_size"],
                 "options": json.loads(q["options_json"]),
                 "correct_index": q["correct_index"],
+                "crop_x": q["crop_x"] if q["crop_x"] is not None else 0.5,
+                "crop_y": q["crop_y"] if q["crop_y"] is not None else 0.5,
             }
             for q in qs
         ],
@@ -408,6 +474,8 @@ async def update_question(
     options: str = Form(...),
     correct_index: int = Form(...),
     image: UploadFile | None = File(None),
+    crop_x: float | None = Form(None),
+    crop_y: float | None = Form(None),
 ):
     with db() as c:
         q = c.execute("SELECT * FROM questions WHERE id=?", (qid,)).fetchone()
@@ -415,6 +483,10 @@ async def update_question(
             raise HTTPException(404, "question not found")
         require_owner(c, q["game_id"], token, current_user(request))
         opts = _validate_opts(options, correct_index)
+
+    # keep the existing crop when the caller doesn't send one
+    cx = _frac(crop_x if crop_x is not None else q["crop_x"])
+    cy = _frac(crop_y if crop_y is not None else q["crop_y"])
 
     ext = q["ext"]
     new_bytes = None
@@ -429,14 +501,14 @@ async def update_question(
 
     with db() as c:
         c.execute(
-            "UPDATE questions SET pixel_size=?, options_json=?, correct_index=?, ext=? WHERE id=?",
-            (int(pixel_size), json.dumps(opts), int(correct_index), ext, qid),
+            "UPDATE questions SET pixel_size=?, options_json=?, correct_index=?, ext=?, crop_x=?, crop_y=? WHERE id=?",
+            (int(pixel_size), json.dumps(opts), int(correct_index), ext, cx, cy, qid),
         )
 
     bust_cache(qid)
     try:
-        pixel_png(qid, ext, int(pixel_size))
-        crisp_png(qid, ext)
+        pixel_png(qid, ext, int(pixel_size), cx, cy)
+        crisp_png(qid, ext, cx, cy)
     except Exception:
         raise HTTPException(400, "could not process image")
     return {"ok": True}
@@ -499,21 +571,33 @@ def get_game(gid: str):
 @app.get("/api/questions/{qid}/pixel.png")
 def get_pixel(qid: int):
     with db() as c:
-        q = c.execute("SELECT ext, pixel_size FROM questions WHERE id=?", (qid,)).fetchone()
+        q = c.execute("SELECT ext, pixel_size, crop_x, crop_y FROM questions WHERE id=?", (qid,)).fetchone()
     if not q:
         raise HTTPException(404, "not found")
-    return Response(pixel_png(qid, q["ext"], q["pixel_size"]), media_type="image/png",
-                    headers={"Cache-Control": "public, max-age=86400"})
+    return Response(pixel_png(qid, q["ext"], q["pixel_size"], q["crop_x"], q["crop_y"]),
+                    media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
 
 
 @app.get("/api/questions/{qid}/crisp.png")
 def get_crisp(qid: int):
     with db() as c:
-        q = c.execute("SELECT ext FROM questions WHERE id=?", (qid,)).fetchone()
+        q = c.execute("SELECT ext, crop_x, crop_y FROM questions WHERE id=?", (qid,)).fetchone()
     if not q:
         raise HTTPException(404, "not found")
-    return Response(crisp_png(qid, q["ext"]), media_type="image/png",
-                    headers={"Cache-Control": "public, max-age=86400"})
+    return Response(crisp_png(qid, q["ext"], q["crop_x"], q["crop_y"]),
+                    media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
+
+
+@app.get("/api/questions/{qid}/source.png")
+def get_source(qid: int, request: Request, token: str | None = None):
+    """Uncropped original for the owner's crop editor — never exposed to players."""
+    with db() as c:
+        q = c.execute("SELECT game_id, ext FROM questions WHERE id=?", (qid,)).fetchone()
+        if not q:
+            raise HTTPException(404, "not found")
+        require_owner(c, q["game_id"], token, current_user(request))
+    return Response(source_png(qid, q["ext"]), media_type="image/png",
+                    headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/questions/{qid}/answer")
@@ -530,7 +614,7 @@ def get_answer(qid: int):
 def submit_play(gid: str, payload: dict):
     name = (payload.get("name") or "Anonymous").strip()[:40] or "Anonymous"
     client_id = (payload.get("client_id") or "").strip()[:80]
-    submitted = payload.get("answers") or []  # [{question_id, chosen_index}]
+    submitted = payload.get("answers") or []  # [{question_id, chosen_index, chosen_name}]
 
     with db() as c:
         g = c.execute("SELECT id FROM games WHERE id=?", (gid,)).fetchone()
@@ -541,6 +625,8 @@ def submit_play(gid: str, payload: dict):
             (gid,),
         ).fetchall()
         chosen = {int(a["question_id"]): int(a["chosen_index"]) for a in submitted}
+        picked_name = {int(a["question_id"]): str(a["chosen_name"]).strip()[:120]
+                       for a in submitted if a.get("chosen_name")}
 
         score = 0
         graded = []
@@ -548,7 +634,10 @@ def submit_play(gid: str, payload: dict):
             pick = chosen.get(q["id"], -1)
             ok = 1 if pick == q["correct_index"] else 0
             score += ok
-            graded.append((q["id"], pick, ok))
+            opts = json.loads(q["options_json"])
+            # prefer the name the client sent; fall back to the option it indexes
+            nm = picked_name.get(q["id"]) or (opts[pick] if 0 <= pick < len(opts) else None)
+            graded.append((q["id"], pick, ok, nm))
 
         total = len(qrows)
         cur = c.execute(
@@ -558,8 +647,8 @@ def submit_play(gid: str, payload: dict):
         )
         pid = cur.lastrowid
         c.executemany(
-            "INSERT INTO answers (play_id, question_id, chosen_index, correct) VALUES (?,?,?,?)",
-            [(pid, qid_, pick, ok) for (qid_, pick, ok) in graded],
+            "INSERT INTO answers (play_id, question_id, chosen_index, correct, chosen_name) VALUES (?,?,?,?,?)",
+            [(pid, qid_, pick, ok, nm) for (qid_, pick, ok, nm) in graded],
         )
 
     reveal = [
@@ -601,6 +690,18 @@ def admin_list_games(request: Request):
     return {"games": [dict(r) for r in rows]}
 
 
+@app.delete("/api/admin/plays/{play_id}")
+def admin_delete_play(play_id: int, request: Request):
+    """Remove a single leaderboard entry (and its answers) — admin only."""
+    require_admin(request)
+    with db() as c:
+        p = c.execute("SELECT id FROM plays WHERE id=?", (play_id,)).fetchone()
+        if not p:
+            raise HTTPException(404, "play not found")
+        c.execute("DELETE FROM plays WHERE id=?", (play_id,))  # CASCADE clears its answers
+    return {"ok": True}
+
+
 @app.delete("/api/admin/games/{gid}")
 def admin_delete_game(gid: str, request: Request):
     require_admin(request)
@@ -620,7 +721,7 @@ def admin_delete_game(gid: str, request: Request):
 def _leaderboard(gid: str):
     with db() as c:
         rows = c.execute(
-            "SELECT name, score, total, created_at FROM plays WHERE game_id=?"
+            "SELECT id, name, score, total, created_at FROM plays WHERE game_id=?"
             " ORDER BY score DESC, created_at ASC LIMIT 100",
             (gid,),
         ).fetchall()
@@ -645,17 +746,38 @@ def get_stats(gid: str):
         for q in qrows:
             opts = json.loads(q["options_json"])
             counts = [0] * len(opts)
+            correct_name = opts[q["correct_index"]] if 0 <= q["correct_index"] < len(opts) else None
             arows = c.execute(
-                "SELECT chosen_index, COUNT(*) n FROM answers WHERE question_id=? GROUP BY chosen_index",
+                "SELECT chosen_index, chosen_name, correct, COUNT(*) n FROM answers"
+                " WHERE question_id=? GROUP BY chosen_index, chosen_name, correct",
                 (q["id"],),
             ).fetchall()
-            answered = 0
+            answered = 0    # every recorded guess, including dropdown picks outside these options
+            correct_n = 0
+            guess_map = {}  # name -> {"name","count","correct"}
             for a in arows:
+                answered += a["n"]
+                if a["correct"]:
+                    correct_n += a["n"]
                 idx = a["chosen_index"]
                 if 0 <= idx < len(counts):
                     counts[idx] += a["n"]
-                    answered += a["n"]
-            correct_n = counts[q["correct_index"]] if opts else 0
+                # resolve the actual name guessed; older rows without a stored name
+                # keep the option they indexed, or fall back to an "other" bucket
+                if a["chosen_name"]:
+                    name = a["chosen_name"]
+                elif 0 <= idx < len(opts):
+                    name = opts[idx]
+                else:
+                    name = "Other"  # older dropdown picks whose name wasn't recorded
+                e = guess_map.setdefault(name, {"name": name, "count": 0, "correct": bool(a["correct"])})
+                e["count"] += a["n"]
+                e["correct"] = e["correct"] or bool(a["correct"])
+            # always surface the correct answer, even if nobody picked it
+            if correct_name and correct_name not in guess_map:
+                guess_map[correct_name] = {"name": correct_name, "count": 0, "correct": True}
+            guesses = sorted(guess_map.values(),
+                             key=lambda x: (-x["count"], not x["correct"], x["name"].lower()))
             questions.append(
                 {
                     "id": q["id"],
@@ -663,7 +785,10 @@ def get_stats(gid: str):
                     "correct_index": q["correct_index"],
                     "counts": counts,
                     "answered": answered,
+                    # guesses of a pool name that isn't one of these options (dropdown mode)
+                    "other": answered - sum(counts),
                     "pct_correct": round(100 * correct_n / answered) if answered else 0,
+                    "guesses": guesses,
                 }
             )
     return {

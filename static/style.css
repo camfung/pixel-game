@@ -269,6 +269,8 @@ input[type=range]::-moz-range-thumb {
   overflow: hidden; background: var(--surface); box-shadow: var(--shadow-sm);
 }
 .stagecard canvas { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; image-rendering: pixelated; border-bottom: 2px solid var(--ink); background: var(--bg); }
+canvas.croppable { cursor: grab; touch-action: none; }
+canvas.croppable.grabbing { cursor: grabbing; }
 .stagecard .stagebody { padding: 8px 10px; }
 .stagecard .fname { font-size: 11px; color: var(--muted); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 6px; }
 .stagecard select { font-size: 13px; padding: 8px 10px; box-shadow: none; }
@@ -281,6 +283,21 @@ input[type=range]::-moz-range-thumb {
 
 /* empty state */
 .empty { color: var(--muted); text-align: center; padding: var(--space-xl) 0; font-weight: 700; }
+
+/* admin: delete a leaderboard entry */
+.lb-del { width: 1%; white-space: nowrap; text-align: right; }
+.del-play {
+  padding: 4px 9px; background: var(--surface); color: var(--terra);
+  border: 1.6px solid var(--ink); box-shadow: 2px 2px 0 0 var(--ink);
+  font-size: 12px; font-weight: 700; border-radius: 8px; cursor: pointer; line-height: 1;
+}
+.del-play:hover { background: var(--terra); color: var(--card); }
+
+/* deploy/version footer */
+.appfooter {
+  text-align: center; padding: var(--space-xl) var(--space-md) var(--space-lg);
+  color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .5px;
+}
 
 /* my games list */
 .mygame {

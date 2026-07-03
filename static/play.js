@@ -147,7 +147,7 @@ async function pick(choiceIdx, btn) {
   if (locked) return;
   locked = true;
   const q = game.questions[idx];
-  myAnswers.push({ question_id: q.id, chosen_index: choiceIdx });
+  myAnswers.push({ question_id: q.id, chosen_index: choiceIdx, chosen_name: q.options[choiceIdx] });
 
   const correct = await fetchCorrect(q);
   const buttons = [...$("choices").children];
@@ -171,7 +171,7 @@ async function pickSelect(name, sel, go) {
   // Map the chosen name back to its index in this question's options so scoring
   // stays index-based. Any pool name that isn't an option here is a wrong guess.
   const choiceIdx = q.options.indexOf(name);
-  myAnswers.push({ question_id: q.id, chosen_index: choiceIdx });
+  myAnswers.push({ question_id: q.id, chosen_index: choiceIdx, chosen_name: name });
 
   const correct = await fetchCorrect(q);
   sel.disabled = true;

@@ -68,24 +68,56 @@ function buildOptions(pool, correct, n) {
   return { options, correct: options.indexOf(correct) };
 }
 
-// ---- pixelation preview (matches server) ----
-function drawPixelated(canvas, img, blocks, maxW) {
-  const w = img.naturalWidth, h = img.naturalHeight;
-  const scale = Math.min(1, maxW / w);
-  const dw = Math.max(1, Math.round(w * scale));
-  const dh = Math.max(1, Math.round(h * scale));
-  canvas.width = dw; canvas.height = dh;
-  const sw = Math.max(1, blocks);
-  const sh = Math.max(1, Math.round(dh * sw / dw));
+const clamp01 = (v) => Math.min(1, Math.max(0, v));
+
+// ---- pixelation preview (matches server: square crop around focal point
+// (cx,cy), block-average downscale, nearest upscale) ----
+function drawPixelated(canvas, img, blocks, maxSize, cx = 0.5, cy = 0.5) {
+  const iw = img.naturalWidth, ih = img.naturalHeight;
+  const s = Math.min(iw, ih);              // square crop side in source pixels
+  const sx = clamp01(cx) * (iw - s), sy = clamp01(cy) * (ih - s);  // focal offset
+  const size = Math.max(1, Math.min(maxSize, s));  // output square side
+  canvas.width = size; canvas.height = size;
+  const blk = Math.max(1, blocks);         // square, so same block count both axes
   const off = document.createElement("canvas");
-  off.width = sw; off.height = sh;
+  off.width = blk; off.height = blk;
   const octx = off.getContext("2d");
   octx.imageSmoothingEnabled = true;
-  octx.drawImage(img, 0, 0, sw, sh);
+  octx.drawImage(img, sx, sy, s, s, 0, 0, blk, blk);
   const ctx = canvas.getContext("2d");
   ctx.imageSmoothingEnabled = false;
-  ctx.clearRect(0, 0, dw, dh);
-  ctx.drawImage(off, 0, 0, sw, sh, 0, 0, dw, dh);
+  ctx.clearRect(0, 0, size, size);
+  ctx.drawImage(off, 0, 0, blk, blk, 0, 0, size, size);
+}
+
+// Drag a preview canvas to pan its square crop. `item` holds {img, cx, cy}
+// (mutated in place); `redraw` repaints after each move.
+function attachCropDrag(canvas, item, redraw) {
+  canvas.classList.add("croppable");
+  let sx0, sy0, cx0, cy0, rect;
+  const onMove = (e) => {
+    const iw = item.img.naturalWidth, ih = item.img.naturalHeight;
+    const s = Math.min(iw, ih);
+    const dx = e.clientX - sx0, dy = e.clientY - sy0;
+    if (iw > s) item.cx = clamp01(cx0 - (dx / rect.width) * s / (iw - s));
+    if (ih > s) item.cy = clamp01(cy0 - (dy / rect.height) * s / (ih - s));
+    redraw();
+  };
+  const onUp = (e) => {
+    canvas.classList.remove("grabbing");
+    canvas.removeEventListener("pointermove", onMove);
+    try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+  };
+  canvas.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    rect = canvas.getBoundingClientRect();
+    sx0 = e.clientX; sy0 = e.clientY; cx0 = item.cx; cy0 = item.cy;
+    canvas.classList.add("grabbing");
+    try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+    canvas.addEventListener("pointermove", onMove);
+  });
+  canvas.addEventListener("pointerup", onUp);
+  canvas.addEventListener("pointercancel", onUp);
 }
 
 function loadImage(src) {
@@ -241,6 +273,7 @@ async function buildCard(q, index) {
     <div class="qedit-top">
       <div>
         <canvas class="preview"></canvas>
+        <div class="radio-hint" style="margin-top:6px;">Drag the image to reposition its crop.</div>
         <label class="filebtn" style="margin-top:8px;">
           <span class="replacelabel">Replace image…</span>
           <input type="file" accept="image/*" class="replace">
@@ -277,16 +310,19 @@ async function buildCard(q, index) {
   const savedFlag = card.querySelector(".savedflag");
   let editor = makeOptsEditor(optsBox, q.options, q.correct_index, "correct-" + q.id);
 
-  let baseImg = await loadImage(`/api/questions/${q.id}/crisp.png?v=${Date.now()}`);
+  // load the uncropped original so the crop can be re-panned against full framing
+  let baseImg = await loadImage(`/api/questions/${q.id}/source.png${tokenParam}${tokenParam ? "&" : "?"}v=${Date.now()}`);
   let pendingFile = null;
+  const crop = { img: baseImg, cx: q.crop_x ?? 0.5, cy: q.crop_y ?? 0.5 };
 
   const refresh = () => {
     pixval.textContent = pix.value + " blocks";
-    drawPixelated(canvas, baseImg, parseInt(pix.value, 10), 320);
+    drawPixelated(canvas, crop.img, parseInt(pix.value, 10), 320, crop.cx, crop.cy);
   };
   refresh();
 
   const dirty = () => savedFlag.classList.add("hidden");
+  attachCropDrag(canvas, crop, () => { refresh(); dirty(); });
   pix.addEventListener("input", () => { refresh(); dirty(); });
   card.querySelector(".addopt").addEventListener("click", () => { editor.addRow(); dirty(); });
   optsBox.addEventListener("input", dirty);
@@ -312,6 +348,7 @@ async function buildCard(q, index) {
     pendingFile = f;
     card.querySelector(".replacelabel").textContent = f.name;
     baseImg = await loadImage(URL.createObjectURL(f));
+    crop.img = baseImg; crop.cx = 0.5; crop.cy = 0.5;  // new image → recentre crop
     refresh();
     dirty();
   });
@@ -327,6 +364,8 @@ async function buildCard(q, index) {
       fd.append("pixel_size", pix.value);
       fd.append("options", JSON.stringify(st.options));
       fd.append("correct_index", String(st.correct));
+      fd.append("crop_x", String(crop.cx));
+      fd.append("crop_y", String(crop.cy));
       if (pendingFile) fd.append("image", pendingFile);
       const r = await fetch(`/api/questions/${q.id}`, { method: "PATCH", body: fd });
       if (!r.ok) throw new Error();

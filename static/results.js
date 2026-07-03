@@ -37,24 +37,50 @@ async function load() {
   renderStats(s.questions);
 }
 
+const adminToken = () => localStorage.getItem("12321") || "";
+
 function renderLeaderboard(rows) {
   if (!rows || rows.length === 0) {
     $("lb").innerHTML = `<p class="empty">No scores yet — share the link to get players.</p>`;
     return;
   }
+  const isAdmin = !!adminToken();
   const medals = ["🥇", "🥈", "🥉"];
   const body = rows
     .map((r, i) => {
       const rank = i < 3 ? `<span class="medal">${medals[i]}</span>` : i + 1;
+      const del = isAdmin
+        ? `<td class="lb-del"><button class="mini del-play" data-id="${r.id}" title="Delete this entry">✕</button></td>`
+        : "";
       return `<tr>
         <td class="rank">${rank}</td>
         <td>${escapeHtml(r.name)}</td>
-        <td class="score">${r.score}/${r.total}</td></tr>`;
+        <td class="score">${r.score}/${r.total}</td>${del}</tr>`;
     })
     .join("");
   $("lb").innerHTML = `<table>
-    <thead><tr><th>#</th><th>Player</th><th>Score</th></tr></thead>
+    <thead><tr><th>#</th><th>Player</th><th>Score</th>${isAdmin ? "<th></th>" : ""}</tr></thead>
     <tbody>${body}</tbody></table>`;
+
+  if (isAdmin) {
+    $("lb").querySelectorAll(".del-play").forEach((btn) =>
+      btn.addEventListener("click", () => deletePlay(btn.dataset.id)));
+  }
+}
+
+async function deletePlay(id) {
+  if (!confirm("Delete this leaderboard entry? Their play and answers are removed.")) return;
+  try {
+    const r = await fetch(`/api/admin/plays/${id}`, {
+      method: "DELETE",
+      headers: { "X-Admin-Token": adminToken() },
+    });
+    if (!r.ok) throw new Error();
+    toast("Entry deleted");
+    load();  // refresh leaderboard + per-question stats (answers were removed too)
+  } catch (_) {
+    toast("Couldn't delete — check your admin token");
+  }
 }
 
 function renderStats(questions) {
@@ -65,17 +91,19 @@ function renderStats(questions) {
   $("stats").innerHTML = questions
     .map((q, qi) => {
       const total = q.answered || 0;
-      const rows = q.options
-        .map((opt, i) => {
-          const n = q.counts[i] || 0;
-          const pct = total ? Math.round((100 * n) / total) : 0;
-          const isCorrect = i === q.correct_index;
+      // every name guessed (dropdown mode spans the whole pool), correct one flagged
+      const guesses = q.guesses && q.guesses.length
+        ? q.guesses
+        : q.options.map((name, i) => ({ name, count: q.counts[i] || 0, correct: i === q.correct_index }));
+      const rows = guesses
+        .map((g) => {
+          const pct = total ? Math.round((100 * g.count) / total) : 0;
           return `<div class="statrow">
-            <div class="txt ${isCorrect ? "is-correct" : ""}">
-              <span>${isCorrect ? "✓ " : ""}<b>${escapeHtml(opt)}</b></span>
-              <span class="n">${n} · ${pct}%</span>
+            <div class="txt ${g.correct ? "is-correct" : ""}">
+              <span>${g.correct ? "✓ " : ""}<b>${escapeHtml(g.name)}</b></span>
+              <span class="n">${g.count} · ${pct}%</span>
             </div>
-            <div class="bar ${isCorrect ? "correct" : ""}"><span style="width:${pct}%"></span></div>
+            <div class="bar ${g.correct ? "correct" : ""}"><span style="width:${pct}%"></span></div>
           </div>`;
         })
         .join("");

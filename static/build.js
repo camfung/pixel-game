@@ -69,24 +69,56 @@ function guessNameFromFile(filename, pool) {
   return pool.find((n) => tokens.includes(n.toLowerCase())) || "";
 }
 
-// ---- pixelation preview (matches server: block-average downscale, nearest upscale) ----
-function drawPixelated(canvas, img, blocks, maxW) {
-  const w = img.naturalWidth, h = img.naturalHeight;
-  const scale = Math.min(1, maxW / w);
-  const dw = Math.max(1, Math.round(w * scale));
-  const dh = Math.max(1, Math.round(h * scale));
-  canvas.width = dw; canvas.height = dh;
-  const sw = Math.max(1, blocks);
-  const sh = Math.max(1, Math.round(dh * sw / dw));
+const clamp01 = (v) => Math.min(1, Math.max(0, v));
+
+// ---- pixelation preview (matches server: square crop around focal point
+// (cx,cy), block-average downscale, nearest upscale) ----
+function drawPixelated(canvas, img, blocks, maxSize, cx = 0.5, cy = 0.5) {
+  const iw = img.naturalWidth, ih = img.naturalHeight;
+  const s = Math.min(iw, ih);              // square crop side in source pixels
+  const sx = clamp01(cx) * (iw - s), sy = clamp01(cy) * (ih - s);  // focal offset
+  const size = Math.max(1, Math.min(maxSize, s));  // output square side
+  canvas.width = size; canvas.height = size;
+  const blk = Math.max(1, blocks);         // square, so same block count both axes
   const off = document.createElement("canvas");
-  off.width = sw; off.height = sh;
+  off.width = blk; off.height = blk;
   const octx = off.getContext("2d");
   octx.imageSmoothingEnabled = true;
-  octx.drawImage(img, 0, 0, sw, sh);
+  octx.drawImage(img, sx, sy, s, s, 0, 0, blk, blk);
   const ctx = canvas.getContext("2d");
   ctx.imageSmoothingEnabled = false;
-  ctx.clearRect(0, 0, dw, dh);
-  ctx.drawImage(off, 0, 0, sw, sh, 0, 0, dw, dh);
+  ctx.clearRect(0, 0, size, size);
+  ctx.drawImage(off, 0, 0, blk, blk, 0, 0, size, size);
+}
+
+// Let the user drag a preview canvas to pan the square crop. `item` holds the
+// image plus its current cx/cy (mutated in place); `redraw` repaints after each move.
+function attachCropDrag(canvas, item, redraw) {
+  canvas.classList.add("croppable");
+  let sx0, sy0, cx0, cy0, rect;
+  const onMove = (e) => {
+    const iw = item.img.naturalWidth, ih = item.img.naturalHeight;
+    const s = Math.min(iw, ih);
+    const dx = e.clientX - sx0, dy = e.clientY - sy0;
+    if (iw > s) item.cx = clamp01(cx0 - (dx / rect.width) * s / (iw - s));
+    if (ih > s) item.cy = clamp01(cy0 - (dy / rect.height) * s / (ih - s));
+    redraw();
+  };
+  const onUp = (e) => {
+    canvas.classList.remove("grabbing");
+    canvas.removeEventListener("pointermove", onMove);
+    try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+  };
+  canvas.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    rect = canvas.getBoundingClientRect();
+    sx0 = e.clientX; sy0 = e.clientY; cx0 = item.cx; cy0 = item.cy;
+    canvas.classList.add("grabbing");
+    try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+    canvas.addEventListener("pointermove", onMove);
+  });
+  canvas.addEventListener("pointerup", onUp);
+  canvas.addEventListener("pointercancel", onUp);
 }
 
 // ---- name pool UI ----
@@ -104,7 +136,7 @@ $("file").addEventListener("change", async (e) => {
   for (const f of files) {
     try {
       const img = await loadImage(URL.createObjectURL(f));
-      staged.push({ file: f, img, name: guessNameFromFile(f.name, pool) });
+      staged.push({ file: f, img, name: guessNameFromFile(f.name, pool), cx: 0.5, cy: 0.5 });
     } catch { toast(`Couldn't read ${f.name}`); }
   }
   $("composer").classList.remove("hidden");
@@ -147,7 +179,7 @@ function refreshStageNote() {
 function redrawStagedThumbs() {
   const blocks = parseInt($("pix").value, 10);
   document.querySelectorAll("#stagedlist canvas").forEach((canvas, i) => {
-    if (staged[i]) drawPixelated(canvas, staged[i].img, blocks, 260);
+    if (staged[i]) drawPixelated(canvas, staged[i].img, blocks, 260, staged[i].cx, staged[i].cy);
   });
 }
 
@@ -171,7 +203,10 @@ function renderStaged() {
           ${pool.map((n) => `<option value="${escapeHtml(n)}"${n === s.name ? " selected" : ""}>${escapeHtml(n)}</option>`).join("")}
         </select>
       </div>`;
-    drawPixelated(card.querySelector("canvas"), s.img, blocks, 260);
+    const canvas = card.querySelector("canvas");
+    drawPixelated(canvas, s.img, blocks, 260, s.cx, s.cy);
+    attachCropDrag(canvas, s, () =>
+      drawPixelated(canvas, s.img, parseInt($("pix").value, 10), 260, s.cx, s.cy));
     const sel = card.querySelector("select");
     sel.disabled = pool.length < 2;
     sel.addEventListener("change", () => {
@@ -200,13 +235,15 @@ $("addall").addEventListener("click", () => {
   staged.forEach((s) => {
     const { options, correct } = buildOptions(pool, s.name, nChoices());
     const thumbCanvas = document.createElement("canvas");
-    drawPixelated(thumbCanvas, s.img, blocks, 260);
+    drawPixelated(thumbCanvas, s.img, blocks, 260, s.cx, s.cy);
     questions.push({
       file: s.file,
       pixel: blocks,
       options,
       correct,
       correctName: s.name,
+      cx: s.cx,
+      cy: s.cy,
       thumb: thumbCanvas.toDataURL("image/png"),
     });
   });
@@ -261,6 +298,8 @@ $("publish").addEventListener("click", async () => {
       fd.append("pixel_size", String(q.pixel));
       fd.append("options", JSON.stringify(q.options));
       fd.append("correct_index", String(q.correct));
+      fd.append("crop_x", String(q.cx ?? 0.5));
+      fd.append("crop_y", String(q.cy ?? 0.5));
       fd.append("token", edit_token);
       const r = await fetch(`/api/games/${id}/questions`, { method: "POST", body: fd });
       if (!r.ok) throw new Error("upload failed at #" + (i + 1));
