@@ -1,0 +1,97 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pixel Reveal — Edit</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/style.css">
+
+<div class="wrap">
+  <div class="topbar">
+    <div class="brand">
+      <div class="logo" id="logo"></div>
+      <div class="name">PIXEL REVEAL<small>editor</small></div>
+    </div>
+    <a class="arrow-link" href="/">Build new</a>
+  </div>
+
+  <div id="gate" class="hidden">
+    <div class="banner err">This edit link is missing its access token, or the token is wrong.
+      Open the game from <b>Your games</b> on the home page.</div>
+    <a class="arrow-link" href="/">Go home</a>
+  </div>
+
+  <div id="editor" class="hidden">
+    <p class="eyebrow">Edit game</p>
+    <h1 id="title-h">…</h1>
+    <div class="row" style="margin-bottom: var(--space-lg);">
+      <a class="btn btn-primary" id="playlink" href="#">Play</a>
+      <a class="btn btn-ghost" id="statslink" href="#">Stats</a>
+      <button class="btn-ghost" id="copyshare">Copy share link</button>
+    </div>
+
+    <div class="card pad-lg">
+      <label for="gtitle">Game title</label>
+      <div class="row">
+        <input type="text" id="gtitle" class="grow" maxlength="120">
+        <button class="btn-primary" id="savetitle">Save title</button>
+      </div>
+    </div>
+
+    <!-- name pool -->
+    <div class="card pad-lg">
+      <div class="row spread" style="margin-bottom: var(--space-md);">
+        <h2 style="margin:0;">Name pool</h2>
+        <span class="pill" id="namecount">0 names</span>
+      </div>
+      <label for="names">One name per line (or comma-separated)</label>
+      <textarea id="names" rows="5" placeholder="Rahim&#10;Bilal&#10;Omar"></textarea>
+      <div class="row spread" style="margin-top: var(--space-md); align-items: flex-end;">
+        <div style="max-width: 260px; flex:1;">
+          <label for="nchoices">Choices per new image</label>
+          <div class="sliderrow">
+            <input type="range" id="nchoices" min="2" max="6" value="4">
+            <span class="val" id="nchoicesval">4</span>
+          </div>
+        </div>
+        <button class="btn-primary" id="savenames">Save pool</button>
+      </div>
+    </div>
+
+    <div class="row spread" style="margin: var(--space-lg) 0 var(--space-md);">
+      <h2 style="margin:0;">Questions</h2>
+      <span class="pill" id="qcount">0</span>
+    </div>
+    <div id="qcontainer"></div>
+
+    <!-- add another -->
+    <div class="card pad-lg">
+      <h2>Add another image</h2>
+      <label class="filebtn" id="filebtn">
+        <span id="filelabel">Choose an image…</span>
+        <input type="file" id="file" accept="image/*">
+      </label>
+      <div id="composer" class="hidden" style="margin-top: var(--space-lg);">
+        <label>Pixelation preview</label>
+        <canvas class="preview" id="preview"></canvas>
+        <div style="margin-top: var(--space-md);">
+          <label>Starting resolution <span class="muted">— lower = harder</span></label>
+          <div class="sliderrow">
+            <input type="range" id="pix" min="4" max="120" value="22">
+            <span class="val" id="pixval">22 blocks</span>
+          </div>
+        </div>
+        <hr class="sep">
+        <label for="correctname">Who is it? <span class="muted">— the correct answer</span></label>
+        <select id="correctname"></select>
+        <div class="distractor-note" id="distractornote"></div>
+        <hr class="sep">
+        <div class="row spread">
+          <button class="btn-ghost" id="cancel" type="button">Cancel</button>
+          <button class="btn-primary" id="addq" type="button">Add to game →</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="/static/edit.js"></script>

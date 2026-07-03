@@ -1,0 +1,38 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pixel Reveal — Stats</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/style.css">
+
+<div class="wrap">
+  <div class="topbar">
+    <div class="brand">
+      <div class="logo" id="logo"></div>
+      <div class="name">PIXEL REVEAL<small>live stats</small></div>
+    </div>
+    <a class="arrow-link" href="/">Make your own</a>
+  </div>
+
+  <p class="eyebrow">Results</p>
+  <h1 id="title">…</h1>
+  <p class="lead"><span class="pill" id="plays">0 plays</span></p>
+
+  <div class="row" style="margin-bottom: var(--space-lg);">
+    <a class="btn btn-primary" id="playlink" href="#">Play the game</a>
+    <button class="btn-ghost" id="share">Copy share link</button>
+    <button class="btn-ghost" id="refresh">Refresh</button>
+  </div>
+
+  <div class="card pad-lg">
+    <h2>Leaderboard</h2>
+    <div id="lb"></div>
+  </div>
+
+  <div class="card pad-lg">
+    <h2>What people guessed</h2>
+    <div id="stats"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="/static/results.js"></script>

@@ -1,0 +1,73 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pixel Reveal</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/style.css">
+
+<div class="wrap">
+  <div class="topbar">
+    <div class="brand">
+      <div class="logo" id="logo"></div>
+      <div class="name">PIXEL REVEAL<small id="gametitle">loading…</small></div>
+    </div>
+    <a class="arrow-link" href="/">Make your own</a>
+  </div>
+
+  <!-- intro -->
+  <div id="intro" class="hidden">
+    <p class="eyebrow">Ready?</p>
+    <h1 id="introtitle"></h1>
+    <p class="lead">Each image starts pixelated. Pick the answer you think is right — you get one shot,
+      then it reveals. <b id="qn"></b></p>
+    <button class="btn-cta" id="start" style="font-size:16px; padding:14px 30px;">Start playing</button>
+  </div>
+
+  <!-- game -->
+  <div id="game" class="hidden">
+    <div class="progress" id="progress"></div>
+    <div class="stage card">
+      <div class="imgwrap">
+        <img id="shot" alt="pixelated image">
+      </div>
+      <p class="muted small" id="hint">Tap your guess</p>
+      <div class="choices" id="choices"></div>
+      <div class="row center" style="justify-content:center; margin-top: var(--space-lg);">
+        <button class="btn-primary hidden" id="next">Next →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- name / submit -->
+  <div id="finish" class="hidden">
+    <div class="card pad-lg center">
+      <p class="eyebrow">Done!</p>
+      <div class="scorebox">
+        <div class="big" id="rawscore"></div>
+        <p class="muted">Add your name to the leaderboard</p>
+      </div>
+      <div style="max-width:360px; margin:0 auto;">
+        <input type="text" id="name" placeholder="Your name" maxlength="40">
+        <button class="btn-cta" id="submit" style="margin-top: var(--space-md); width:100%;">Submit score</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- results after submit / already played -->
+  <div id="done" class="hidden">
+    <div class="card pad-lg center">
+      <p class="eyebrow" id="donelabel">Your score</p>
+      <div class="scorebox"><div class="big" id="finalscore"></div></div>
+      <div class="row" style="justify-content:center;">
+        <a class="btn btn-ghost" id="statslink" href="#">See full stats</a>
+        <a class="arrow-link" href="/">Build your own</a>
+      </div>
+    </div>
+    <div class="card pad-lg">
+      <h2>Leaderboard</h2>
+      <div id="lb"></div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="/static/play.js"></script>
