@@ -9,6 +9,7 @@ never sent to a player before they answer.
 import html
 import io
 import json
+import math
 import os
 import secrets
 import sqlite3
@@ -35,6 +36,9 @@ for d in (DATA, UPLOADS, CACHE):
 SERVE_MAX = 1100  # side (px) of the square each served image is cropped to
 MIN_BLOCKS, MAX_BLOCKS = 3, 160  # pixelation resolution bounds (blocks across)
 IMG_VER = "sq1"  # bump to invalidate the on-disk image cache when processing changes
+COLLAGE_MAX = 9      # most images shown in the share-preview collage
+COLLAGE_TARGET = 1200  # target width (px) of the collage grid
+COLLAGE_GAP = 8      # px gap between cells in the collage
 
 # --------------------------------------------------------------------- auth cfg
 load_dotenv(BASE / ".env")
@@ -217,6 +221,60 @@ def source_png(qid: int, ext: str) -> bytes:
 
 def bust_cache(qid: int):
     for p in CACHE.glob(f"{qid}_*.png"):  # every cached variant/version for this question
+        p.unlink(missing_ok=True)
+
+
+def _pixel_cell(qid: int, ext: str, blocks: int, side: int,
+                cx: float = 0.5, cy: float = 0.5) -> Image.Image:
+    """A crisp-blocked pixelation of one question rendered at exactly `side`px,
+    so collage cells share one size with no double-resize blur."""
+    im = _base_image(qid, ext, cx, cy)  # square
+    blocks = max(MIN_BLOCKS, min(blocks, MAX_BLOCKS))
+    small = im.resize((blocks, blocks), Image.Resampling.BILINEAR)  # average per block
+    return small.resize((side, side), Image.Resampling.NEAREST)     # crisp blocks
+
+
+def collage_png(gid: str) -> bytes | None:
+    """A grid of the first up-to-9 pixelated images for a game — used as the
+    social share preview. Cached on disk; None when the game has no questions."""
+    path = CACHE / f"collage_{gid}_{IMG_VER}.png"
+    if path.exists():
+        return path.read_bytes()
+    with db() as c:
+        qs = c.execute(
+            "SELECT id, ext, pixel_size, crop_x, crop_y FROM questions"
+            " WHERE game_id=? ORDER BY position LIMIT ?",
+            (gid, COLLAGE_MAX),
+        ).fetchall()
+    if not qs:
+        return None
+
+    n = len(qs)
+    cols = math.ceil(math.sqrt(n))
+    rows = math.ceil(n / cols)
+    cell = COLLAGE_TARGET // cols
+    W = cols * cell + (cols + 1) * COLLAGE_GAP
+    H = rows * cell + (rows + 1) * COLLAGE_GAP
+    canvas = Image.new("RGB", (W, H), (17, 17, 17))  # matches the app's dark bg
+    for i, q in enumerate(qs):
+        try:
+            tile = _pixel_cell(q["id"], q["ext"], q["pixel_size"], cell,
+                               q["crop_x"], q["crop_y"])
+        except Exception:
+            continue  # skip an unreadable image rather than fail the whole collage
+        r, cc = divmod(i, cols)
+        x = COLLAGE_GAP + cc * (cell + COLLAGE_GAP)
+        y = COLLAGE_GAP + r * (cell + COLLAGE_GAP)
+        canvas.paste(tile, (x, y))
+
+    buf = io.BytesIO()
+    canvas.save(buf, "PNG")
+    path.write_bytes(buf.getvalue())
+    return path.read_bytes()
+
+
+def bust_game_collage(gid: str):
+    for p in CACHE.glob(f"collage_{gid}_*.png"):
         p.unlink(missing_ok=True)
 
 
@@ -415,6 +473,7 @@ async def add_question(
         with db() as c:
             c.execute("DELETE FROM questions WHERE id=?", (qid,))
         raise HTTPException(400, "could not process image")
+    bust_game_collage(gid)
     return {"question_id": qid}
 
 
@@ -507,6 +566,7 @@ async def update_question(
         )
 
     bust_cache(qid)
+    bust_game_collage(q["game_id"])
     try:
         pixel_png(qid, ext, int(pixel_size), cx, cy)
         crisp_png(qid, ext, cx, cy)
@@ -525,6 +585,7 @@ def delete_question(qid: int, request: Request, token: str | None = None):
         c.execute("DELETE FROM questions WHERE id=?", (qid,))
     (UPLOADS / f"{qid}.{q['ext']}").unlink(missing_ok=True)
     bust_cache(qid)
+    bust_game_collage(q["game_id"])
     return {"ok": True}
 
 
@@ -538,6 +599,7 @@ def reorder_questions(gid: str, payload: dict, request: Request):
                 "UPDATE questions SET position=? WHERE id=? AND game_id=?",
                 (pos, int(qid), gid),
             )
+    bust_game_collage(gid)  # order changed -> which 9 images (and their layout) may differ
     return {"ok": True}
 
 
@@ -577,6 +639,16 @@ def get_pixel(qid: int):
         raise HTTPException(404, "not found")
     return Response(pixel_png(qid, q["ext"], q["pixel_size"], q["crop_x"], q["crop_y"]),
                     media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
+
+
+@app.get("/api/games/{gid}/collage.png")
+def get_collage(gid: str):
+    """Grid of the game's pixelated images — the social share-preview image."""
+    data = collage_png(gid)
+    if data is None:
+        raise HTTPException(404, "no images")
+    return Response(data, media_type="image/png",
+                    headers={"Cache-Control": "public, max-age=3600"})
 
 
 @app.get("/api/questions/{qid}/crisp.png")
@@ -715,6 +787,7 @@ def admin_delete_game(gid: str, request: Request):
     for q in qs:
         (UPLOADS / f"{q['id']}.{q['ext']}").unlink(missing_ok=True)
         bust_cache(q["id"])
+    bust_game_collage(gid)
     return {"ok": True}
 
 
@@ -854,7 +927,8 @@ def _social_meta(request: Request, gid: str) -> str:
     else:
         blurb = "A pixelated-image guessing game. Each image starts blocky — guess before it reveals."
     page_url = f"{base}/g/{gid}"
-    image = f"{base}/api/questions/{cover['id']}/pixel.png" if cover else f"{base}/static/favicon.svg"
+    # a grid of up to 9 pixelated images (falls back to the favicon pre-upload)
+    image = f"{base}/api/games/{gid}/collage.png" if cover else f"{base}/static/favicon.svg"
 
     et, eb, eu, ei = (html.escape(title, True), html.escape(blurb, True),
                       html.escape(page_url, True), html.escape(image, True))
