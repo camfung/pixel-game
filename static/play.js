@@ -75,6 +75,8 @@ function renderProgress() {
 
 const selectMode = () => game.answer_mode === "select";
 
+let crispPreload = null;  // holds the in-flight preload so it isn't GC'd
+
 function loadQuestion() {
   locked = false;
   const q = game.questions[idx];
@@ -83,23 +85,32 @@ function loadQuestion() {
   shot.src = `/api/questions/${q.id}/pixel.png`;
   hide("next");
 
+  // Warm the crisp image now, while the player is guessing, so revealing it
+  // after they answer is instant (served from cache — endpoint sets max-age).
+  crispPreload = new Image();
+  crispPreload.src = `/api/questions/${q.id}/crisp.png`;
+
   const box = $("choices");
   box.innerHTML = "";
   box.classList.toggle("as-select", selectMode());
   if (selectMode()) {
     $("hint").textContent = "Pick from the list, then guess";
+    // Dropdown lists the entire name pool (falling back to this question's
+    // options for older games that predate the pool being sent), sorted A–Z.
+    const names = (game.names && game.names.length ? game.names : q.options)
+      .slice().sort((a, b) => a.localeCompare(b));
     const sel = document.createElement("select");
     sel.className = "guess-select";
     sel.innerHTML =
       `<option value="" disabled selected>Choose an answer…</option>` +
-      q.options.map((opt, i) => `<option value="${i}">${escapeHtml(opt)}</option>`).join("");
+      names.map((n) => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join("");
     const go = document.createElement("button");
     go.className = "btn-primary guess-go";
     go.textContent = "Guess";
     go.disabled = true;
     sel.addEventListener("change", () => { go.disabled = sel.value === ""; });
     go.addEventListener("click", () => {
-      if (sel.value !== "") pickSelect(parseInt(sel.value, 10), sel, go);
+      if (sel.value !== "") pickSelect(sel.value, sel, go);
     });
     box.appendChild(sel);
     box.appendChild(go);
@@ -153,10 +164,13 @@ async function pick(choiceIdx, btn) {
   finishGuess(q);
 }
 
-async function pickSelect(choiceIdx, sel, go) {
+async function pickSelect(name, sel, go) {
   if (locked) return;
   locked = true;
   const q = game.questions[idx];
+  // Map the chosen name back to its index in this question's options so scoring
+  // stays index-based. Any pool name that isn't an option here is a wrong guess.
+  const choiceIdx = q.options.indexOf(name);
   myAnswers.push({ question_id: q.id, chosen_index: choiceIdx });
 
   const correct = await fetchCorrect(q);

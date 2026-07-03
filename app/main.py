@@ -480,14 +480,20 @@ def get_game(gid: str):
             "SELECT id, options_json FROM questions WHERE game_id=? ORDER BY position",
             (gid,),
         ).fetchall()
-    return {
+    mode = g["answer_mode"] or "choices"
+    resp = {
         "id": g["id"],
         "title": g["title"],
-        "answer_mode": g["answer_mode"] or "choices",
+        "answer_mode": mode,
         "questions": [
             {"id": q["id"], "options": json.loads(q["options_json"])} for q in qs
         ],
     }
+    # The dropdown lists the whole name pool, so it's sent to players; buttons
+    # mode deliberately omits it so the full answer set isn't exposed.
+    if mode == "select":
+        resp["names"] = json.loads(g["names_json"]) if g["names_json"] else []
+    return resp
 
 
 @app.get("/api/questions/{qid}/pixel.png")
