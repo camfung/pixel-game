@@ -1,0 +1,18 @@
+services:
+  pixel-reveal:
+    build: .
+    image: pixel-reveal
+    container_name: pixel-reveal
+    ports:
+      - "${PORT:-8777}:8777"
+    environment:
+      # Signs the session cookie. Set a real value in .env (see .env.example).
+      # Falls back to a dev-insecure default inside the app if unset.
+      SECRET_KEY: "${SECRET_KEY:-}"
+      # Leave blank to run without login; fill to enable "Sign in with Google".
+      GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID:-}"
+      GOOGLE_CLIENT_SECRET: "${GOOGLE_CLIENT_SECRET:-}"
+    volumes:
+      # Persist the SQLite db + uploaded/cached images across container restarts.
+      - ./data:/app/data
+    restart: unless-stopped

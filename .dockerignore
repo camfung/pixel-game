@@ -1,0 +1,11 @@
+.git
+.gitignore
+.venv
+.env
+data
+__pycache__
+*.pyc
+*.png
+.playwright-mcp
+immich-*
+README.md
