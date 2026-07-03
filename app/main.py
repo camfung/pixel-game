@@ -837,11 +837,15 @@ def _social_meta(request: Request, gid: str) -> str:
             "SELECT COUNT(*) AS n FROM questions WHERE game_id=?", (gid,)
         ).fetchone()["n"]
 
-    # Behind nginx, uvicorn ignores forwarded headers (proxy isn't in its
-    # trusted IPs), so request.base_url would say http. Honour the proxy's
-    # X-Forwarded-Proto so og:image/og:url use https on the real site.
-    proto = request.headers.get("x-forwarded-proto", request.url.scheme).split(",")[0].strip()
+    # The public site sits behind TLS-terminating proxies, so the scheme the
+    # app sees is plain http and og:image/og:url would come out http (which
+    # strict crawlers reject). The real domain is only ever served over https,
+    # so force https for it; keep the request scheme only for local dev.
     host = request.headers.get("host") or request.url.netloc
+    hostname = host.split(":")[0].lower()
+    is_local = (hostname in ("localhost", "127.0.0.1", "0.0.0.0")
+                or hostname.endswith(".local"))
+    proto = request.url.scheme if is_local else "https"
     base = f"{proto}://{host}"
     title = g["title"] or "Pixelizer"
     if n:
