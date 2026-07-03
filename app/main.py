@@ -40,6 +40,9 @@ SECRET_KEY = os.environ.get("SECRET_KEY") or "dev-insecure-change-me"
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
 AUTH_ENABLED = bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
+# Site-admin token: the admin page sends localStorage["12321"] as X-Admin-Token
+# and the server compares against this, so the value never ships in served JS.
+ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN") or "aoeisrtn9102"
 
 app = FastAPI(title="Pixel Reveal")
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="lax", https_only=False)
@@ -549,6 +552,47 @@ def submit_play(gid: str, payload: dict):
             "leaderboard": _leaderboard(gid)}
 
 
+# ------------------------------------------------------------------- api: admin
+def require_admin(request: Request):
+    """404 rather than 403 on a bad token, so the admin surface is invisible to probing."""
+    if request.headers.get("X-Admin-Token") != ADMIN_TOKEN:
+        raise HTTPException(404, "not found")
+
+
+@app.get("/api/admin/games")
+def admin_list_games(request: Request):
+    """Every game — including unpublished zero-question ones browse hides."""
+    require_admin(request)
+    with db() as c:
+        rows = c.execute(
+            """
+            SELECT g.id, g.title, g.owner_name, g.created_at,
+                   (SELECT COUNT(*) FROM questions q WHERE q.game_id=g.id) AS question_count,
+                   (SELECT COUNT(*) FROM plays p    WHERE p.game_id=g.id) AS play_count,
+                   (SELECT id FROM questions q WHERE q.game_id=g.id
+                      ORDER BY position LIMIT 1)                          AS cover_qid
+            FROM games g
+            ORDER BY g.created_at DESC
+            """
+        ).fetchall()
+    return {"games": [dict(r) for r in rows]}
+
+
+@app.delete("/api/admin/games/{gid}")
+def admin_delete_game(gid: str, request: Request):
+    require_admin(request)
+    with db() as c:
+        g = c.execute("SELECT id FROM games WHERE id=?", (gid,)).fetchone()
+        if not g:
+            raise HTTPException(404, "game not found")
+        qs = c.execute("SELECT id, ext FROM questions WHERE game_id=?", (gid,)).fetchall()
+        c.execute("DELETE FROM games WHERE id=?", (gid,))  # CASCADE clears questions/plays/answers
+    for q in qs:
+        (UPLOADS / f"{q['id']}.{q['ext']}").unlink(missing_ok=True)
+        bust_cache(q["id"])
+    return {"ok": True}
+
+
 # ------------------------------------------------------------------- api: stats
 def _leaderboard(gid: str):
     with db() as c:
@@ -621,6 +665,11 @@ def index():
 @app.get("/browse")
 def browse_page():
     return _page("browse.html")
+
+
+@app.get("/admin")
+def admin_panel_page():
+    return _page("admin.html")
 
 
 @app.get("/g/{gid}")

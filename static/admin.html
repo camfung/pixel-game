@@ -1,0 +1,53 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pixel Reveal — Admin</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/style.css">
+<style>
+  .admin-list { display: flex; flex-direction: column; gap: 10px; margin-top: 24px; }
+  .admin-row {
+    display: flex; align-items: center; gap: 14px;
+    padding: 10px 14px; border: 2px solid #1d2b1f; border-radius: 12px;
+    background: #fff; box-shadow: 3px 3px 0 #1d2b1f;
+  }
+  .admin-thumb {
+    width: 56px; height: 42px; border-radius: 8px; overflow: hidden;
+    background: #eee5d8; flex: none;
+  }
+  .admin-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .admin-info { flex: 1; min-width: 0; }
+  .admin-title { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .admin-title a { color: inherit; }
+  .admin-meta { font-size: 13px; opacity: 0.7; }
+  .btn-danger {
+    flex: none; cursor: pointer; font: inherit; font-weight: 700;
+    padding: 8px 14px; border: 2px solid #1d2b1f; border-radius: 10px;
+    background: #c53a20; color: #fff; box-shadow: 2px 2px 0 #1d2b1f;
+  }
+  .btn-danger:active { transform: translate(2px, 2px); box-shadow: none; }
+  .btn-danger:disabled { opacity: 0.5; cursor: default; }
+</style>
+
+<div class="wrap">
+  <div class="topbar">
+    <div class="brand">
+      <div class="logo" id="logo"></div>
+      <div class="name">PIXEL REVEAL<small>admin</small></div>
+    </div>
+    <nav class="nav">
+      <a class="arrow-link" href="/browse">Browse</a>
+    </nav>
+  </div>
+
+  <div id="denied" class="empty hidden">Nothing here.</div>
+
+  <div id="panel" class="hidden">
+    <p class="eyebrow">Admin</p>
+    <h1>Manage games.</h1>
+    <p class="lead">Every game on the server, including unpublished ones. Deleting a game removes its images, plays, and leaderboard permanently.</p>
+    <div id="list" class="admin-list"></div>
+    <div class="empty hidden" id="empty">No games on the server.</div>
+  </div>
+</div>
+
+<script src="/static/admin.js"></script>
