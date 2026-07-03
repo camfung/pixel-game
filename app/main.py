@@ -325,6 +325,18 @@ def _clean_names(v) -> list[str]:
 
 
 # -------------------------------------------------------------------- api: auth
+def _public_base(request: Request) -> str:
+    """Absolute site origin. Behind a TLS-terminating proxy the app only sees
+    http, so force https for the public domain (keeping the real scheme for
+    local dev). Used for OAuth redirect URIs and social-preview URLs alike."""
+    host = request.headers.get("host") or request.url.netloc
+    hostname = host.split(":")[0].lower()
+    is_local = (hostname in ("localhost", "127.0.0.1", "0.0.0.0")
+                or hostname.endswith(".local"))
+    proto = request.url.scheme if is_local else "https"
+    return f"{proto}://{host}"
+
+
 def current_user(request: Request) -> dict | None:
     return request.session.get("user")
 
@@ -345,7 +357,11 @@ async def auth_login(request: Request, next: str = "/"):
         raise HTTPException(503, "Google login is not configured on this server")
     # only same-site relative paths — never redirect off to another origin post-login
     request.session["post_login"] = next if next.startswith("/") and not next.startswith("//") else "/"
-    return await oauth.google.authorize_redirect(request, request.url_for("auth_callback"))
+    # Build the callback on the public https origin — request.url_for() would
+    # use the http scheme the app sees behind the proxy, which Google rejects
+    # as a redirect_uri mismatch. Must exactly match the URI in Google Console.
+    redirect_uri = _public_base(request) + "/auth/callback"
+    return await oauth.google.authorize_redirect(request, redirect_uri)
 
 
 @app.get("/auth/callback")
@@ -411,10 +427,14 @@ def browse():
 # ------------------------------------------------------------------- api: build
 @app.post("/api/games")
 def create_game(payload: dict, request: Request):
+    user = current_user(request)
+    # Creating a game requires a signed-in Google account (playing never does).
+    # When auth isn't configured at all (local dev) anonymous creation stays on.
+    if AUTH_ENABLED and not user:
+        raise HTTPException(401, "Sign in to create a game")
     title = (payload.get("title") or "Untitled game").strip()[:120]
     names = _clean_names(payload.get("names"))
     answer_mode = _clean_answer_mode(payload.get("answer_mode"))
-    user = current_user(request)
     gid = secrets.token_hex(4)
     token = secrets.token_hex(16)
     with db() as c:
@@ -900,16 +920,7 @@ def _social_meta(request: Request, gid: str) -> str:
             "SELECT COUNT(*) AS n FROM questions WHERE game_id=?", (gid,)
         ).fetchone()["n"]
 
-    # The public site sits behind TLS-terminating proxies, so the scheme the
-    # app sees is plain http and og:image/og:url would come out http (which
-    # strict crawlers reject). The real domain is only ever served over https,
-    # so force https for it; keep the request scheme only for local dev.
-    host = request.headers.get("host") or request.url.netloc
-    hostname = host.split(":")[0].lower()
-    is_local = (hostname in ("localhost", "127.0.0.1", "0.0.0.0")
-                or hostname.endswith(".local"))
-    proto = request.url.scheme if is_local else "https"
-    base = f"{proto}://{host}"
+    base = _public_base(request)  # https for the public domain (see helper)
     title = g["title"] or "Pixelizer"
     if n:
         blurb = (f"Guess {n} pixelated image{'s' if n != 1 else ''}. "

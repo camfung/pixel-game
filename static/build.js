@@ -271,7 +271,14 @@ function renderQuestions() {
   });
   $("qcount").textContent = questions.length + " added";
   $("qempty").classList.toggle("hidden", questions.length > 0);
-  $("publish").disabled = questions.length === 0;
+  updatePublishState();
+}
+
+// Publishing needs at least one question AND (when accounts are enabled) a
+// signed-in user. `canPublish` starts true so local/no-auth setups still work.
+let canPublish = true;
+function updatePublishState() {
+  $("publish").disabled = questions.length === 0 || !canPublish;
 }
 
 // ---- publish ----
@@ -287,6 +294,13 @@ $("publish").addEventListener("click", async () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ title, names: namePool(), answer_mode: answerMode() }),
     });
+    if (gres.status === 401) {
+      canPublish = false;
+      $("signingate").classList.remove("hidden");
+      updatePublishState();
+      $("signingate").scrollIntoView({ behavior: "smooth", block: "center" });
+      throw new Error("Sign in to publish your game");
+    }
     if (!gres.ok) throw new Error("create game failed");
     const { id, edit_token } = await gres.json();
 
@@ -389,6 +403,10 @@ async function initAuth() {
   } else if (me.enabled) {
     box.innerHTML = `<a class="btn btn-ghost gbtn" href="/auth/login?next=%2F">Sign in with Google</a>`;
   }
+  // Gate publishing on being signed in whenever accounts are enabled.
+  canPublish = !(me.enabled && !me.user);
+  $("signingate").classList.toggle("hidden", canPublish);
+  updatePublishState();
   renderMyGames();
 }
 

@@ -111,6 +111,12 @@
 
   <!-- publish -->
   <div class="card pad-lg center">
+    <div id="signingate" class="hidden" style="margin-bottom: var(--space-lg);">
+      <p class="muted" style="margin-bottom: var(--space-md);">You need a free account to publish a game.
+        Playing never requires an account.</p>
+      <a class="btn-cta gbtn" href="/auth/login?next=%2F"
+         style="display:inline-block; text-decoration:none;">Sign in with Google to publish</a>
+    </div>
     <button class="btn-cta" id="publish" disabled style="font-size:16px; padding:14px 30px;">Publish game</button>
     <div id="publishout" class="hidden" style="margin-top: var(--space-lg);">
       <p class="eyebrow" style="color:var(--color-cta);">Live — share this link</p>
