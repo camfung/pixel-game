@@ -262,6 +262,23 @@ input[type=range]::-moz-range-thumb {
 .qthumb .lbl { padding: 8px 10px; font-size: 11px; color: var(--muted); font-weight: 600; }
 .qthumb .lbl b { color: var(--ink); font-weight: 700; }
 
+/* bulk staging grid (builder) */
+.stagegrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: var(--space-md); }
+.stagecard {
+  position: relative; border: 2px solid var(--ink); border-radius: var(--radius-sm);
+  overflow: hidden; background: var(--surface); box-shadow: var(--shadow-sm);
+}
+.stagecard canvas { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; image-rendering: pixelated; border-bottom: 2px solid var(--ink); background: var(--bg); }
+.stagecard .stagebody { padding: 8px 10px; }
+.stagecard .fname { font-size: 11px; color: var(--muted); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 6px; }
+.stagecard select { font-size: 13px; padding: 8px 10px; box-shadow: none; }
+.stagecard.needsname select { border-color: var(--terra); box-shadow: 2px 2px 0 0 var(--terra); }
+.stagecard .x {
+  position: absolute; top: 6px; right: 6px; background: var(--terra); color: var(--card);
+  border: 1.8px solid var(--ink); border-radius: 8px; width: 26px; height: 26px; line-height: 22px;
+  text-align: center; cursor: pointer; font-weight: 700; box-shadow: 2px 2px 0 0 var(--ink); padding: 0; z-index: 1;
+}
+
 /* empty state */
 .empty { color: var(--muted); text-align: center; padding: var(--space-xl) 0; font-weight: 700; }
 

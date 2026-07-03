@@ -18,9 +18,8 @@ const escapeHtml = (s) =>
 $("logo").innerHTML = LOGO_COLORS.map((c) => `<i style="background:${c}"></i>`).join("");
 
 // ---- state ----
-let currentImg = null;      // HTMLImageElement of selected file
-let currentFile = null;     // File object
 const questions = [];       // {file, pixel, options[], correct, thumb, correctName}
+const staged = [];          // images picked but not yet added: {file, img, name}
 
 // ---- name pool helpers ----
 function parseNames(text) {
@@ -52,6 +51,24 @@ function buildOptions(pool, correct, n) {
   return { options, correct: options.indexOf(correct) };
 }
 
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = src;
+  });
+}
+
+// guess the correct name from the filename ("Omar (1).jpg" -> "Omar") against the pool
+function guessNameFromFile(filename, pool) {
+  const base = filename.replace(/\.[^.]+$/, "").trim().toLowerCase();
+  let hit = pool.find((n) => n.toLowerCase() === base);
+  if (hit) return hit;
+  const tokens = base.split(/[^a-z0-9]+/i).filter(Boolean);
+  return pool.find((n) => tokens.includes(n.toLowerCase())) || "";
+}
+
 // ---- pixelation preview (matches server: block-average downscale, nearest upscale) ----
 function drawPixelated(canvas, img, blocks, maxW) {
   const w = img.naturalWidth, h = img.naturalHeight;
@@ -72,105 +89,131 @@ function drawPixelated(canvas, img, blocks, maxW) {
   ctx.drawImage(off, 0, 0, sw, sh, 0, 0, dw, dh);
 }
 
-function refreshPreview() {
-  if (!currentImg) return;
-  const blocks = parseInt($("pix").value, 10);
-  $("pixval").textContent = blocks + " blocks";
-  drawPixelated($("preview"), currentImg, blocks, 760);
-}
-
 // ---- name pool UI ----
 function refreshNameCount() {
   const n = namePool().length;
   $("namecount").textContent = n + (n === 1 ? " name" : " names");
 }
 
-function populateCorrectSelect() {
+// ---- bulk staging ----
+$("file").addEventListener("change", async (e) => {
+  const files = [...e.target.files].filter((f) => f.type.startsWith("image/"));
+  e.target.value = "";  // let the user re-pick / add more later
+  if (!files.length) return;
   const pool = namePool();
-  const sel = $("correctname");
-  const prev = sel.value;
-  sel.innerHTML = pool.map((n) => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join("");
-  if (pool.includes(prev)) sel.value = prev;
-  sel.disabled = pool.length < 2;
-  updateDistractorNote();
-}
-
-function updateDistractorNote() {
-  const pool = namePool();
-  const note = $("distractornote");
-  const addBtn = $("addq");
-  if (pool.length < 2) {
-    note.innerHTML = `Add at least <b>2 names</b> to the pool above first.`;
-    addBtn.disabled = true;
-    return;
+  for (const f of files) {
+    try {
+      const img = await loadImage(URL.createObjectURL(f));
+      staged.push({ file: f, img, name: guessNameFromFile(f.name, pool) });
+    } catch { toast(`Couldn't read ${f.name}`); }
   }
-  const shown = Math.min(nChoices(), pool.length);
-  note.innerHTML = `Shows <b>${shown}</b> choices — the correct name plus <b>${shown - 1}</b> random name${shown - 1 === 1 ? "" : "s"} from your pool.`;
-  addBtn.disabled = false;
-}
+  $("composer").classList.remove("hidden");
+  renderStaged();
+  $("composer").scrollIntoView({ behavior: "smooth", block: "nearest" });
+});
 
-$("names").addEventListener("input", () => {
-  refreshNameCount();
-  if (currentImg) populateCorrectSelect();
+$("pix").addEventListener("input", () => {
+  $("pixval").textContent = $("pix").value + " blocks";
+  redrawStagedThumbs();
 });
 $("nchoices").addEventListener("input", () => {
   $("nchoicesval").textContent = $("nchoices").value;
-  updateDistractorNote();
+  refreshStageNote();
 });
-
-// ---- file select ----
-$("file").addEventListener("change", (e) => {
-  const f = e.target.files[0];
-  if (!f) return;
-  currentFile = f;
-  $("filelabel").textContent = f.name;
-  const img = new Image();
-  img.onload = () => {
-    currentImg = img;
-    $("pix").value = 22;
-    $("composer").classList.remove("hidden");
-    populateCorrectSelect();
-    refreshPreview();
-    $("composer").scrollIntoView({ behavior: "smooth", block: "nearest" });
-  };
-  img.src = URL.createObjectURL(f);
+$("names").addEventListener("input", () => {
+  refreshNameCount();
+  if (staged.length) renderStaged();  // re-match filenames + refresh name dropdowns
 });
-
-$("pix").addEventListener("input", refreshPreview);
 $("cancel").addEventListener("click", resetComposer);
 
 function resetComposer() {
-  currentImg = null; currentFile = null;
+  staged.length = 0;
   $("file").value = "";
-  $("filelabel").textContent = "Choose an image…";
+  $("filelabel").textContent = "Choose image(s)…";
   $("composer").classList.add("hidden");
 }
 
-// ---- add question to the game ----
-$("addq").addEventListener("click", () => {
-  if (!currentImg || !currentFile) return;
+function refreshStageNote() {
+  const pool = namePool();
+  const note = $("distractornote");
+  if (pool.length < 2) {
+    note.innerHTML = `Add at least <b>2 names</b> to the pool above first.`;
+    return;
+  }
+  const shown = Math.min(nChoices(), pool.length);
+  note.innerHTML = `Each image shows <b>${shown}</b> choices — the correct name plus <b>${shown - 1}</b> random name${shown - 1 === 1 ? "" : "s"} from your pool.`;
+}
+
+function redrawStagedThumbs() {
+  const blocks = parseInt($("pix").value, 10);
+  document.querySelectorAll("#stagedlist canvas").forEach((canvas, i) => {
+    if (staged[i]) drawPixelated(canvas, staged[i].img, blocks, 260);
+  });
+}
+
+function renderStaged() {
+  const pool = namePool();
+  const blocks = parseInt($("pix").value, 10);
+  const list = $("stagedlist");
+  list.innerHTML = "";
+  staged.forEach((s, i) => {
+    if (s.name && !pool.includes(s.name)) s.name = "";  // pool changed under it
+    if (!s.name) s.name = guessNameFromFile(s.file.name, pool);
+    const card = document.createElement("div");
+    card.className = "stagecard" + (s.name ? "" : " needsname");
+    card.innerHTML = `
+      <button class="x" title="Remove" type="button">✕</button>
+      <canvas></canvas>
+      <div class="stagebody">
+        <div class="fname" title="${escapeHtml(s.file.name)}">${escapeHtml(s.file.name)}</div>
+        <select>
+          <option value="">— pick name —</option>
+          ${pool.map((n) => `<option value="${escapeHtml(n)}"${n === s.name ? " selected" : ""}>${escapeHtml(n)}</option>`).join("")}
+        </select>
+      </div>`;
+    drawPixelated(card.querySelector("canvas"), s.img, blocks, 260);
+    const sel = card.querySelector("select");
+    sel.disabled = pool.length < 2;
+    sel.addEventListener("change", () => {
+      s.name = sel.value;
+      card.classList.toggle("needsname", !s.name);
+    });
+    card.querySelector(".x").addEventListener("click", () => {
+      staged.splice(i, 1);
+      if (staged.length) renderStaged(); else resetComposer();
+    });
+    list.appendChild(card);
+  });
+  $("stagecount").textContent = staged.length + (staged.length === 1 ? " image" : " images");
+  refreshStageNote();
+}
+
+// ---- add all staged images to the game ----
+$("addall").addEventListener("click", () => {
+  if (!staged.length) return;
   const pool = namePool();
   if (pool.length < 2) { toast("Add at least 2 names to the pool"); return; }
-  const correctName = $("correctname").value;
-  if (!correctName) { toast("Pick the correct name"); return; }
+  const missing = staged.filter((s) => !s.name).length;
+  if (missing) { toast(`Pick a name for ${missing} more image${missing === 1 ? "" : "s"}`); return; }
 
   const blocks = parseInt($("pix").value, 10);
-  const { options, correct } = buildOptions(pool, correctName, nChoices());
-
-  const thumbCanvas = document.createElement("canvas");
-  drawPixelated(thumbCanvas, currentImg, blocks, 260);
-
-  questions.push({
-    file: currentFile,
-    pixel: blocks,
-    options,
-    correct,
-    correctName,
-    thumb: thumbCanvas.toDataURL("image/png"),
+  staged.forEach((s) => {
+    const { options, correct } = buildOptions(pool, s.name, nChoices());
+    const thumbCanvas = document.createElement("canvas");
+    drawPixelated(thumbCanvas, s.img, blocks, 260);
+    questions.push({
+      file: s.file,
+      pixel: blocks,
+      options,
+      correct,
+      correctName: s.name,
+      thumb: thumbCanvas.toDataURL("image/png"),
+    });
   });
+  const n = staged.length;
   renderQuestions();
   resetComposer();
-  toast("Question added");
+  toast(`Added ${n} image${n === 1 ? "" : "s"}`);
 });
 
 function renderQuestions() {
